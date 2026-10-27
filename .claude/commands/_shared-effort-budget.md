@@ -29,7 +29,8 @@ names the row of the table below that it uses.
 | Independent verifier (one per lane; also preps the merge) | high | background agent in the lane's worktree | 30 lines |
 | Integration-fix pass (after the last lane merges) | high | background agent in its own worktree | 30 lines |
 | Design foundation (shared sheets, chrome, fixtures) | high | agent, before any screen agent | 30 lines |
-| Design area (wireframes or mockups for 3–6 screens) | medium | background agent | 15 lines |
+| Design area: wireframes for 3–6 screens (makes each screen's Show / On demand / Omit decisions) | high | background agent | 15 lines |
+| Design area: mockups for 3–6 screens (renders wireframes whose decisions are already made) | medium | background agent | 15 lines |
 | Spec verifier (blueprint or design set) | high | 2 agents split by file ownership, never more on the same files | 30 lines |
 | Accessibility check (never the agent that chose the colours) | medium | agent | 20 lines |
 | Code search across many files | medium | Explore agent | the conclusion only |

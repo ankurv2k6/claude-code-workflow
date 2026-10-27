@@ -120,7 +120,7 @@ Every screen then builds on these, so screens match each other by construction.
 See `_shared-autonomous.md`. **Skip in mockups-only mode.**
 
 Group screens into **areas of 3–6 screens** by feature or flow, and launch one background agent per
-area. Use effort medium (row "Design area"; a project or user rule overrides), with no turn cap and no
+area. Use effort high (row "Design area: wireframes"; a project or user rule overrides), with no turn cap and no
 wall-clock timeout. Completion comes by notification (`_shared-agent-timeout.md`). Each agent reads the
 brief and the foundation once, and reports in 15 lines or fewer.
 
@@ -142,7 +142,8 @@ per module. State lives on disk: if your context is summarized, glob the wirefra
 ## Phase 5: Mockups by area
 
 **Full mode (`--with-mockups`) or mockups-only.** In mockups-only, read the existing wireframes first.
-Use the same area agents and configuration as Phase 4.
+Use area agents as in Phase 4, but at effort medium (row "Design area: mockups"): a mockup renders
+decisions its wireframe already made.
 
 Each standalone HTML:
 - **Styling:** the project's own design-system sheet(s) and fonts from Phase 3. Add Tailwind only if the
