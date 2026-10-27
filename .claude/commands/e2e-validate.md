@@ -20,6 +20,8 @@ Build an exhaustive E2E validation suite that tests a module's core features, da
 
 Use TodoWrite. Execute autonomously from start to finish.
 
+**When to run:** standalone, once per module when it is done. **Inside `/implement-batch`, once per batch on the final head**, never inside a lane, so it exercises the merged system. Identity, mail and third-party services run as the project's fakes or recorded fixtures, never live (the project's `## Hard guardrails`). Fix triage follows `~/.claude/commands/_shared-triage.md`.
+
 <!--
 @include ./_shared-autonomous.md
 @include ./_shared-agent-timeout.md
@@ -27,9 +29,9 @@ Use TodoWrite. Execute autonomously from start to finish.
 
 ---
 
-## Core Rule: Root-Cause and Fix All Gaps
+## Core Rule: Root-Cause and Fix What Fails
 
-> **MANDATORY**: Any gap, failure, or inconsistency discovered during ANY phase of this command — test design, implementation, execution, or analysis — MUST be root-caused and fixed at its origin, regardless of which module owns the faulty code.
+> **MANDATORY**: Every **failing test**, and every defect that breaks normal use, found during ANY phase of this command (test design, implementation, execution or analysis) MUST be root-caused and fixed at its origin, whichever module owns the faulty code. Other inconsistencies (MEDIUM, LOW, edge cases, style) are **logged** with a reason, per `_shared-triage.md`, not chased.
 >
 > This is NOT a read-only audit. E2E validation exists to surface real problems. When a problem is found:
 >
@@ -370,7 +372,7 @@ For EVERY non-passing test:
 **Step 4 — Rerun and verify**
 - Rerun the fixed test
 - Run any existing tests in the affected module to confirm no regressions
-- If the fix touches a contract or shared module, widen per `_shared-test-selection.md` (tier `standard`, or `full` for a shared contract) rather than running every package by hand
+- If the fix touches a contract or shared module, run the selection for the changed files per `_shared-test-selection.md` (`--files`); standalone, an escalated tier runs once at the end, never per fix
 
 ### 4.4 Fix-Rerun Loop
 
@@ -393,9 +395,11 @@ monorepo it is both faster and wider than looping per package (it catches the re
 a test in package A breaks because package B changed):
 
 ```bash
-node scripts/test-select.mjs --tier standard --run   # mapped projects
-# unmapped: for each modified package → cd packages/[pkg] && pnpm test
+node scripts/test-select.mjs --since <sha before fixes> --run   # mapped projects: once, after all fixes
+# unmapped: for each modified package → its test command, once
 ```
+
+At a batch's final gate the orchestrator's single `full` run covers this; do not add another.
 
 ### 4.5 Fix Tracking
 

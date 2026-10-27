@@ -6,6 +6,7 @@
 |----------|---------|
 | `~/.claude/commands/` | Shared skill commands (symlinked from `claudeworkflow`) |
 | `~/.claude/_repo/` | Agent repository catalog (read-only source) |
+| `~/.claude/templates/` | Task list, lane briefs, hard-guardrails snippet, test-map guide (symlinked from `claudeworkflow`) |
 | `<project>/.claude/agents/` | Installed project-specific agents |
 | `<project>/.claude/sessions/` | Session ID files for Slack integration (gitignored) |
 | `<project>/context/implementation-status.md` | Cross-session module tracking |
@@ -43,7 +44,7 @@ For multi-module batch execution:
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
 | **`/plan`** | Transform idea into implementation-ready plan via interactive Q&A. Auto-invokes `/analyze-plan` at end. | `--quick` (skip discovery)<br>`--research` (enable web research)<br>`--no-research` (skip research)<br>`--tech "<stack>"` (pre-specify tech)<br>`--no-analyze` (skip auto analysis) | `context/plans/plan-*.md` |
-| **`/analyze-plan`** | Deeply analyze plan quality: completeness, security, logging, testing, feasibility. Prompts to select gap tiers to fix, then auto-runs `/implement-plan` remediation. | `[plan-path]` or focus keyword<br>`--no-fix` (analysis only)<br>`--timeout=<seconds>` (per-agent timeout, default 120) | Plan quality score, gap report, auto-remediation |
+| **`/analyze-plan`** | Deeply analyze plan quality: completeness, security, logging, testing, feasibility. Prompts to select gap tiers to fix, then applies the fixes to the plan document (never starts code). | `[plan-path]` or focus keyword<br>`--no-fix` (analysis only)<br>`--deep` (5 agents instead of 2) | Plan quality score, gap report, updated plan |
 | **`/blueprint`** | Create three-layer architecture system (blueprints + impl specs + registry) from plan. Auto-verifies unless `--no-verify`. | `[plan-path]`<br>`--verify` (audit artifacts)<br>`--no-verify` (skip auto-verify) | `blprnt-master.md`, module plans, impl specs, registry, verify report |
 
 ---
@@ -52,15 +53,15 @@ For multi-module batch execution:
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| **`/implement-plan`** | Execute plan phases automatically with **mandatory verify-loop** (max 5 iterations, needs 1 clean run to PASS). Updates plan file in real-time. | `[plan-path or phase]`<br>`--skip-verification` (skip verify-loop)<br>`--skip-stub-gate` (skip stub verification) | Updated plan, committed code, verification status |
-| **`/implement-batch`** | Execute multiple modules autonomously via `/implement-plan`. Each module runs full verify-loop. **BATCH PASS** requires ALL modules to pass verification. | `--resume` (continue from checkpoint)<br>`--dry-run` (preview plan)<br>`--from M<N>` (start module)<br>`--to M<N>` (end module)<br>`--sequential` (disable parallelism)<br>`--skip-verification`<br>`--skip-stub-gate`<br>`--timeout=<minutes>` (per-module, default 30) | `context/batch-progress.md`, per-module status, decision log |
+| **`/implement-plan`** | Execute plan phases automatically, one commit per task, targeted tests and real-browser UI parity, then **capped verification** (CRITICAL/HIGH block, ≤ 2 sweeps) and the stub gate. Updates plan file in real time. | `[plan-path or phase]`<br>`--lane` (inside `/implement-batch`)<br>`--skip-verification`<br>`--skip-stub-gate` | Updated plan, committed code, verification status |
+| **`/implement-batch`** | Execute a blueprint set as parallel **lanes in git worktrees**, each followed by an independent verifier that preps its merge; the orchestrator merges and keeps a living task list that can resume every agent. One full test run at the end. | `--resume`<br>`--dry-run` (lane map, task list, briefs only)<br>`--from M<N>` / `--to M<N>`<br>`--max-lanes=<n>` (default 5)<br>`--sequential`<br>`--stall=<minutes>` (default 45)<br>`--skip-verification`<br>`--skip-stub-gate` | `context/batch-progress.md`, `context/batch-briefs/`, merged integration branch |
 
-**Verify-Loop (MANDATORY for /implement-plan)**:
-- Runs `/verify-implementation [PLAN_PATH] --force` iteratively after all phases complete
-- **PASS**: 1 clean run with zero Critical/High/Medium gaps
-- **FAIL**: 5 iterations exhausted without achieving 1 clean run → plan marked "Verification Failed"
-- Auto-fixes gaps between iterations
-- Module is NOT complete until verify-loop terminates with PASS or FAIL
+**Verification (MANDATORY for /implement-plan)** — rules in `_shared-triage.md`:
+- **Sweep 1** runs `/verify-implementation [PLAN_PATH] --force` (2 agents that run the code as well as reading it).
+- **Sweep 2** re-checks only the fixes, then stops.
+- **PASS**: no open CRITICAL or HIGH (including normal-use breaks). Medium and Low go to a deferred log with reasons.
+- **FAIL**: a CRITICAL or HIGH still open after sweep 2 → "Verification Failed".
+- In `--lane` mode the lane self-reviews, and `/implement-batch`'s independent verifier follows.
 
 ---
 
@@ -68,8 +69,8 @@ For multi-module batch execution:
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| **`/verify-implementation`** | Deep verification with 6 parallel agents (implementation, logging, testing, security, UI, stubs). Auto-fixes all gaps. Supports blueprint mode. | `[plan-path]` or focus keyword<br>`--force` (re-verify completed)<br>`--all` (verify all modules)<br>`--stubs` (stub detection only)<br>`--status [module]` (query stub gate status)<br>`--timeout=<seconds>` (per-agent, default 120) | Gap report, auto-remediated code, stub tracking |
-| **`/verify-ui`** | Verify UI implementation against wireframes/mockups. 4 parallel agents (visual, functional, accessibility, design system). Auto-fixes gaps, generates compliance score. | `[component or focus]`<br>`visual`, `accessibility`, `functional`, `design-system` | Compliance report with score, gap fixes, history |
+| **`/verify-implementation`** | Verification that runs the code: 2 agents split by file ownership (7 with `--deep`). Fixes CRITICAL, HIGH and normal-use findings in ≤ 2 sweeps; logs the rest. Supports blueprint mode. | `[plan-path]` or focus keyword<br>`--force`<br>`--all`<br>`--stubs`<br>`--status [module]`<br>`--deep` | Gap report, fixes, deferred log, stub tracking |
+| **`/verify-ui`** | Verify UI with real-browser screenshot pairs (mockup vs app, per state) plus functional, accessibility and design-system checks. Fixes visible gaps; the score informs, never gates. | `[component or focus]`<br>`visual`, `accessibility`, `functional`, `design-system` | Compliance report, screenshot pairs, history |
 | **`/codebase-audit`** | Comprehensive read-only code quality analysis (maintainability, security, performance, production-readiness). | `[section]` or `all`<br>`security`, `performance`, etc. | Audit report with scores and priorities |
 
 ---
@@ -78,7 +79,7 @@ For multi-module batch execution:
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| **`/design-ui`** | Generate wireframes (Markdown + ASCII) from plan. Discovers and follows project design system. Parallel agents per screen. | `[plan-path]`<br>`--with-mockups` (add HTML mockups)<br>`--mockups-only` (mockups from wireframes)<br>`--module <name>` (single module)<br>`--update` (update from revised plan)<br>`--verify` (audit + auto-fix)<br>`--sync-blueprints` (sync UI specs to blueprints)<br>`--guide` (show input guide)<br>`--timeout=<seconds>` (per-screen, default 90) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if --with-mockups) |
+| **`/design-ui`** | Generate wireframes (Markdown + ASCII) from plan under a binding declutter brief (Show / On demand / Omit). Foundation agent first, then one agent per area of 3–6 screens, then consolidation. | `[plan-path]`<br>`--with-mockups` (add HTML mockups)<br>`--mockups-only` (mockups from wireframes)<br>`--module <name>` (single module)<br>`--update` (update from revised plan)<br>`--verify` (audit + auto-fix)<br>`--sync-blueprints` (sync UI specs to blueprints)<br>`--guide` (show input guide)<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if --with-mockups) |
 
 ---
 
@@ -95,7 +96,7 @@ For multi-module batch execution:
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| **`/commit`** | Stage all changes, run security scans (gitleaks, secret patterns), TypeScript/ESLint/Prettier checks, generate conventional commit message, commit locally (no push). | `[message]` (use provided message)<br>`--no-push` (commit without pushing)<br>`--amend` (amend previous commit) | Git commit with conventional message |
+| **`/commit`** | Stage all changes, run security scans (gitleaks, secret patterns), TypeScript/ESLint/Prettier and test-map checks, generate conventional commit message, commit, push a feature branch. The default or a deploying branch is pushed only with `--push`. | `[message]`<br>`--no-push`<br>`--push` (approve pushing a default/deploying branch)<br>`--amend` | Git commit with conventional message |
 
 **Pre-commit checks (BLOCKING)**:
 - Gitleaks secret scan
@@ -165,24 +166,23 @@ When `/blueprint` runs, it creates:
 /implement-plan
   ├──> Implement all phases
   ├──> Commit each phase
-  └──> VERIFY-LOOP (MANDATORY):
-         ├── Run /verify-implementation [PLAN_PATH] --force
-         ├── Auto-fix gaps
-         ├── Repeat until: 1 clean run (PASS) OR 5 iterations (FAIL)
-         └── STUB GATE (after verify-loop PASS):
+  └──> VERIFICATION (MANDATORY, ≤ 2 sweeps):
+         ├── Sweep 1: /verify-implementation [PLAN_PATH] --force → fix CRITICAL/HIGH/normal-use, log the rest
+         ├── Sweep 2: re-check the fixes only → STOP
+         └── STUB GATE (after a verification PASS):
               ├── Scan for actionable/blocked/MVP stubs
               ├── Auto-fix actionable stubs (2 rounds)
               └── PASS: 0 actionable | FAIL: actionable remain
 ```
 
 **Tri-State Status**:
-- `✅ COMPLETE`: Verify-loop PASS + Stub gate PASS
-- `❌ VERIFICATION_FAILED`: Verify-loop FAIL (5 iterations exhausted)
-- `⚠️ STUB_GATE_FAILED`: Verify-loop PASS but stub gate FAIL
+- `✅ COMPLETE`: Verification PASS + Stub gate PASS
+- `❌ VERIFICATION_FAILED`: open CRITICAL/HIGH after 2 sweeps
+- `⚠️ STUB_GATE_FAILED`: Verification PASS but stub gate FAIL
 
 **Batch Execution**:
-- Each module invokes `/implement-plan` via Skill tool
-- Each module runs full verify-loop (same PASS/FAIL criteria)
+- Phase 0 (contracts + stubs, UI foundation) first; then lanes in worktrees, each built by one agent (`/implement-plan --lane`)
+- An independent verifier per lane (same PASS/FAIL criteria) also preps the merge; the orchestrator merges
 - **BATCH PASS**: ALL modules `✅ COMPLETE` (verify + stub gates pass)
 - **BATCH FAIL**: ANY module with `❌ VERIFICATION_FAILED`, `⚠️ STUB_GATE_FAILED`, `FAILED`, or `BLOCKED`
 - Complete-implementation stub gate runs after all modules for cross-module stub resolution
@@ -208,31 +208,31 @@ When `/blueprint` runs, it creates:
 ```
 /plan → /recommend-agents → /blueprint → /design-ui → /implement-plan → /commit
 ```
-Note: `/analyze-plan` runs automatically at end of `/plan`. Verify-loop runs inside `/implement-plan`.
+Note: `/analyze-plan` runs automatically at end of `/plan`. Verification runs inside `/implement-plan`.
 
 **Quick feature** (skip blueprint for simple features):
 ```
 /plan --quick → /implement-plan → /commit
 ```
-Verify-loop still runs inside `/implement-plan`.
+Verification still runs inside `/implement-plan`.
 
 **UI feature** (with wireframes/mockups):
 ```
 /plan → /design-ui --with-mockups → /implement-plan → /commit
 ```
-UI mockup compliance verified during verify-loop.
+UI parity proven with real-browser screenshot pairs during implementation and verification.
 
 **Complex system** (full blueprint with verification):
 ```
 /plan → /recommend-agents → /blueprint → /blueprint --verify → /design-ui → /implement-plan M1 → ...
 ```
-Each module has its own verify-loop + stub gate.
+Each module has its own verification + stub gate.
 
 **Batch execution** (all modules autonomously):
 ```
 /plan → /recommend-agents → /blueprint → /design-ui → /implement-batch → /commit
 ```
-Each module executes via `/implement-plan` with mandatory verify-loop + stub gate. **BATCH PASS** requires ALL modules `✅ COMPLETE` (both gates pass). Supports `--resume`, `--from M<N>`, `--to M<N>`, `--dry-run`, `--sequential`.
+Lanes run `/implement-plan --lane`, each followed by an independent verifier; one full test run plus e2e on the final head. **BATCH PASS** requires every module merged with no open CRITICAL/HIGH. Supports `--resume` (resume every agent from the task list), `--from M<N>`, `--to M<N>`, `--dry-run`, `--max-lanes`.
 
 **Existing plan** (skip interactive planning):
 ```
@@ -261,36 +261,37 @@ Displays per-module stub gate status from `context/implementation-status.md` and
 2. **CLAUDE.md under 500 lines** — extract large sections to on-demand skills
 3. **Path-scope rules** — use `paths:` frontmatter so rules load only when relevant
 4. **Run `/optimize-context audit`** periodically to check context size
-5. **Use `/compact`** at ~70% context capacity (don't wait for auto-compact at 95%)
+5. **Keep state on disk** — plans, task lists and lane notes, so an automatic context summary or a lost session costs nothing
 6. **Start fresh sessions** — plan in one session, implement in another
 
 ### Implementation Workflow
 
 1. **Always use TodoWrite** — track phases and mark items complete immediately
-2. **Verify-loop is MANDATORY** — `/implement-plan` runs iterative verification after all phases complete:
-   - Runs `/verify-implementation [PLAN_PATH] --force` iteratively
-   - **PASS**: 1 clean run (zero Critical/High/Medium gaps)
-   - **FAIL**: 5 iterations exhausted → plan marked "❌ VERIFICATION_FAILED"
-   - Auto-fixes gaps between iterations
-   - Loop MUST complete before stub gate runs
-3. **Stub gate follows verify-loop** — After verify-loop PASS:
+2. **Verification is MANDATORY, and capped** — `/implement-plan` verifies after all phases complete (`_shared-triage.md`):
+   - Sweep 1: `/verify-implementation [PLAN_PATH] --force`; fix CRITICAL, HIGH and normal-use breaks
+   - Sweep 2: re-check the fixes only, then stop
+   - **PASS**: no open CRITICAL/HIGH. **FAIL** → "❌ VERIFICATION_FAILED"
+   - Medium and Low are logged with reasons, not chased
+3. **Stub gate follows verification** — After a verification PASS:
    - Scans for actionable/blocked/MVP stubs via `/verify-implementation --stubs`
    - Auto-fixes actionable stubs (max 2 rounds)
    - **PASS**: 0 actionable stubs → `✅ COMPLETE`
    - **FAIL**: Actionable stubs remain → `⚠️ STUB_GATE_FAILED`
    - Blocked/MVP stubs are tracked but don't fail gate
-4. **Batch execution enforces same workflow** — `/implement-batch` invokes `/implement-plan` for each module:
-   - Every module runs full verify-loop (5 iter max, 2 clean = PASS) + stub gate
-   - **BATCH PASS**: ALL modules `✅ COMPLETE` (both gates pass)
+4. **Batch execution runs lanes** — `/implement-batch` runs lanes of 1–3 modules in git worktrees:
+   - Each lane runs `/implement-plan --lane`, then an independent verifier (≤ 2 sweeps), then the orchestrator merges
+   - Targeted tests in lanes; one full run + e2e on the final head
+   - Every agent has a brief on disk and an id in the task list, so an interrupted session resumes it
+   - **BATCH PASS**: every module merged with no open CRITICAL/HIGH and no actionable stub
    - **BATCH FAIL**: ANY module with `❌ VERIFICATION_FAILED`, `⚠️ STUB_GATE_FAILED`, `FAILED`, or `BLOCKED`
    - Autonomous decision protocol: analyze options → select best → proceed without pausing
    - Complete-implementation stub gate runs after all modules for cross-module cleanup
 5. **Context sync on completion** — plan file, status file, registry, MEMORY.md are all updated
 6. **Blueprint mode discipline** — follow context manifests (Section 12 context allowlist), don't load extra files
 7. **Tri-state completion tracking** — Implementation status uses:
-   - `✅ COMPLETE`: Verify-loop PASS + Stub gate PASS
-   - `❌ VERIFICATION_FAILED`: Verify-loop FAIL (5 iterations exhausted)
-   - `⚠️ STUB_GATE_FAILED`: Verify-loop PASS but stub gate FAIL
+   - `✅ COMPLETE`: Verification PASS + Stub gate PASS
+   - `❌ VERIFICATION_FAILED`: open CRITICAL/HIGH after 2 sweeps
+   - `⚠️ STUB_GATE_FAILED`: Verification PASS but stub gate FAIL
 
 ### Commit Safety
 
@@ -327,7 +328,8 @@ Displays per-module stub gate status from `context/implementation-status.md` and
 |------|------------|---------|
 | `context/plans/plan-*.md` | `/plan` | Implementation-ready plan from idea |
 | `context/implementation-status.md` | `/implement-plan` | Module status tracking |
-| `context/batch-progress.md` | `/implement-batch` | Batch execution progress and checkpoints |
+| `context/batch-progress.md` | `/implement-batch` | Living task list: lanes, agents (ids, worktrees, DBs), decisions, deferred findings, owner items, resume procedure |
+| `context/batch-briefs/` | `/implement-batch` | One brief per lane agent + shared `_common.md` / `_verify.md` (what a relaunch uses) |
 | `context/.sync-state.json` | `/sync-context` | Incremental sync state (gitignored) |
 | `context/blueprints/blprnt-*.md` | `/blueprint` | Architecture specs |
 | `context/implementation/impl-*.md` | `/blueprint` | Code-level specs |

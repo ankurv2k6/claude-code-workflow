@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Stage, commit, and push all changes to the repository with an AI-generated commit message following project conventions.
+description: Stage and commit all changes with an AI-generated commit message following project conventions, through the project's gates; push a feature branch. A push to the default branch or a branch that deploys needs explicit --push.
 ---
 
 # Commit Changes
@@ -11,6 +11,7 @@ description: Stage, commit, and push all changes to the repository with an AI-ge
 - `/commit` - Auto-generate commit message
 - `/commit "message"` - Use provided message
 - `/commit --no-push` - Commit without pushing
+- `/commit --push` - Also push when the branch is the default branch or a deploying branch (the explicit approval for that one push)
 - `/commit --amend` - Amend previous commit (use with caution)
 
 ---
@@ -152,22 +153,28 @@ See `_shared-commit-protocol.md` for format (Conventional Commits), types, HERED
 
 **Command-specific additions**:
 - **Scopes**: the module ID being committed (e.g. `m16`) or a package/app name (e.g. `campaigns`, `api`, `web`, `db`)
-- Include `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line before Co-Authored-By
+- **Attribution**: use the attribution lines the session supplies (`_shared-commit-protocol.md`). The "Generated with Claude Code" line belongs in pull-request descriptions, not commit messages, unless the session says otherwise.
 
 ### Step 4: Stage & Commit
 
 ```bash
 git add -A
 ```
-Use HEREDOC pattern from `_shared-commit-protocol.md`. Add the `🤖 Generated with [Claude Code]` line before the Co-Authored-By footer.
+Use HEREDOC pattern from `_shared-commit-protocol.md`, ending with the session's attribution lines.
 
-### Step 5: Push (unless --no-push)
+### Step 5: Push (push policy)
+
+| Branch | Default |
+|---|---|
+| A feature branch | push, unless `--no-push` |
+| The default branch (`main`/`master`), or a branch the project's CLAUDE.md says deploys on push | **do not push** without `--push` — a push here can deploy production; report "committed, not pushed: <branch> deploys" and stop |
+| Inside an agent launched by another command | never push |
 
 ```bash
 git push -u origin <branch>
 ```
 
-If rejected: `git fetch && git rebase origin/<branch>` then retry.
+If rejected: `git fetch && git rebase origin/<branch>` then retry. Never force-push the default branch.
 
 ### Step 6: Report
 
@@ -176,7 +183,7 @@ If rejected: `git fetch && git rebase origin/<branch>` then retry.
 **Branch**: <branch> | **Commit**: <sha>
 **Message**: <subject>
 **Changes**: X files, +Y/-Z lines
-**Status**: Pushed to origin/<branch>
+**Status**: Pushed to origin/<branch> | Not pushed (<reason>)
 ```
 
 ---
@@ -187,6 +194,7 @@ If rejected: `git fetch && git rebase origin/<branch>` then retry.
 
 - Commit `.env` files with secrets
 - Force push to `main`/`master` without explicit request
+- Push the default or a deploying branch without `--push`
 - Use `--no-verify` to skip hooks
 - Amend pushed commits without confirmation
 - Skip TypeScript or lint errors
@@ -237,6 +245,7 @@ If rejected: `git fetch && git rebase origin/<branch>` then retry.
 
 ## Version History
 
+- **2026-10-27**: Push policy (deploying branches need `--push`); attribution from the session; test-map check
 - **2026-02-23**: Added gitleaks, secret scanning, TypeScript/ESLint/Prettier checks; explicit no-tests policy
 - **2026-01-22**: Condensed for context efficiency
 - **2026-01-08**: Initial version

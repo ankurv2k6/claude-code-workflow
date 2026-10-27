@@ -1,16 +1,18 @@
 ---
-description: Verify UI implementation against approved wireframes and mockups, identify gaps, auto-fix issues, and generate a design compliance report with scoring.
+description: Verify a UI implementation against its wireframes and mockups with real-browser screenshot pairs in each state. Fixes structure, copy, state and accessibility gaps (HIGH), logs the rest, and reports a compliance score that informs but never gates.
 ---
 # Verify UI Command
 
-Comprehensive verification of UI implementation against approved wireframes and mockups. Identifies visual, functional, accessibility, and design system gaps with automated remediation and compliance scoring.
+Verification of UI implementation against approved wireframes and mockups. Visual parity is proven with **real-browser screenshot pairs** (`~/.claude/commands/_shared-ui-parity.md`), not by reading component code. Functional, accessibility and design-system checks complete the picture. Blocking follows `~/.claude/commands/_shared-triage.md`: a difference a user can see in structure, copy or state is HIGH and gets fixed; a few pixels of spacing is LOW and is logged. The compliance score is reported for trend, never used as a gate — re-running to raise a grade chases LOW items.
+
+**When:** after every UI module (`/implement-plan` and `/implement-batch` run it, or its parity protocol, per screen). Size the pass by how much normal use the module touches: S (one screen), M (a flow), L (a whole area).
 
 ## Arguments
 - `$ARGUMENTS` - Optional: specific component name, wireframe path, or keyword (`visual`, `accessibility`, `functional`, `design-system`, `all`)
 
 ## Workflow
 
-Use TodoWrite to track progress. **Launch parallel agents for independent analysis phases.** After analysis, **automatically fix all discovered gaps** without asking for permission.
+Use TodoWrite to track progress. **Launch parallel agents for independent analysis phases.** After analysis, **automatically fix CRITICAL, HIGH and normal-use gaps** without asking for permission; log MEDIUM and LOW with reasons. At most 2 sweeps: analysis + fixes, then a re-check of the fixes only.
 
 ---
 
@@ -87,31 +89,30 @@ Use TodoWrite to track progress. **Launch parallel agents for independent analys
 
 #### Agent 1: Visual Compliance Agent
 ```
-Task: subagent_type: "code-reviewer"
-Prompt: VISUAL COMPLIANCE VERIFICATION
+Task: subagent_type: the project's UI or general-purpose agent (it must be able to run a browser)
+Prompt: VISUAL PARITY IN A REAL BROWSER — follow ~/.claude/commands/_shared-ui-parity.md
 
-WIREFRAMES: [inject list of wireframe paths from Phase 1]
-IMPLEMENTATION: [inject list of component paths from Phase 1]
+MOCKUPS + STATES: [inject mockup paths and each mockup's state list from Phase 1]
+APP ROUTES: [inject the route and the seed/fixture that reaches each state]
 CROSS-REFERENCE: [inject matrix from Phase 1 step 5]
 
-Compare each implemented component against its wireframe specifications:
+1. Run the app on your own port, seeded so each state is reachable.
+2. For each screen and each key state, screenshot the mockup (?state=<s>) and the app in the
+   same state, at 1440×900 unless the project sets another size. Save the pair under
+   context/verification/parity/<screen>-<state>-{mockup,app}.png.
+3. Compare each pair: structure, copy, state, missing or extra elements; check the wireframe's
+   Information decisions table (nothing it omits is shown). Theme tokens, not colour literals.
+4. Responsive: repeat the main state at each breakpoint the wireframe defines.
 
-1. LAYOUT STRUCTURE: Grid systems, spacing, dimensions match wireframe ASCII diagrams
-2. TYPOGRAPHY: Font sizes, weights, colors per wireframe specs (h6=20px, body1=16px, etc.)
-3. COLORS: Design tokens match (--color-primary: #1976d2, --color-success: #2e7d32, etc.)
-4. SPACING: Material 8px baseline grid followed (spacing-xs=8px, spacing-sm=16px, etc.)
-5. COMPONENT DIMENSIONS: Cards, modals, inputs match specified sizes
-6. SHADOWS/ELEVATION: Material elevation values (elevation={2}, hover={4})
-7. RESPONSIVE BREAKPOINTS: Desktop (>=1024), Tablet (768-1023), Mobile (<=767)
-
-For each mismatch, output:
+For each difference, output:
 - VIS-XXX code
-- Severity (CRITICAL/HIGH/MEDIUM/LOW)
-- Wireframe spec vs actual implementation
-- File:line location
+- Severity: a difference a user can see in structure, copy or state = HIGH;
+  a few pixels of spacing or a shade = LOW; seeded-data differences are not findings
+- Screenshot pair paths, and the file:line most likely responsible
 - Required fix
 
-Output: Gap list as VIS-* codes with severity, plus total checkpoint count.
+No browser available → report VIS as NOT PROVEN (AUDIT-INCOMPLETE), never as a pass.
+Output: Gap list as VIS-* codes with severity, the pair paths, plus total checkpoint count (pairs compared).
 ```
 
 #### Agent 2: Functional Compliance Agent
@@ -243,7 +244,9 @@ Output: Gap list as DS-* codes, plus total checkpoint count.
    - Group gaps by component
    - Calculate individual component scores
 
-8. **Output Score Summary**
+8. **Blocking set (triage, not score)**: blocking = CRITICAL + HIGH + anything that breaks normal use (`_shared-triage.md`). The score and grade are reported for trend only; they never decide whether the module passes.
+
+9. **Output Score Summary**
    ```
    SCORE: [X.X]% [Grade] | VIS: [Y]% | FUNC: [Z]% | A11Y: [W]% | DS: [V]%
    GAPS: [N] total (CRITICAL: X, HIGH: Y, MEDIUM: Z, LOW: W)
@@ -268,21 +271,21 @@ Output: Gap list as DS-* codes, plus total checkpoint count.
 
 ---
 
-### Phase 5: Automated Remediation (Fix All Gaps)
+### Phase 5: Automated Remediation (Fix Blocking Gaps)
 
-**Proceed through all fixes autonomously in priority order. Do NOT ask for permission.**
+**Proceed through blocking fixes autonomously in priority order. Do NOT ask for permission.**
 
 1. **Fix CRITICAL Gaps (Sequential)**
    For each CRITICAL gap:
    - Read the affected file(s)
    - Implement the fix per wireframe spec
-   - Run tests: `cd admin-ui && npm test -- --passWithNoTests 2>/dev/null`
+   - Run the tests selected for the changed files (`_shared-test-selection.md`; never a pass-with-no-tests setting, which turns an empty selection into a false green)
    - Mark gap as FIXED
 
-2. **Fix HIGH Gaps (Parallel Where Possible)**
-   Launch parallel Task agents for independent fixes:
+2. **Fix HIGH and normal-use Gaps**
+   Fix directly. Launch parallel fix agents only for large, independent fixes (`_shared-effort-budget.md`):
    ```
-   Task: subagent_type: "frontend-engineer"
+   Task: subagent_type: the project's UI implementation agent (e.g. "react-specialist"), else "general-purpose"
    Prompt: FIX GAP [GAP-ID]: [description]
    File: [path] | Line: [line]
    Wireframe Ref: [file.md] section
@@ -290,28 +293,15 @@ Output: Gap list as DS-* codes, plus total checkpoint count.
    Return: Modified code and change summary.
    ```
 
-3. **Fix MEDIUM Gaps**
-   Implement directly:
-   - Spacing/sizing adjustments
-   - Missing ARIA attributes
-   - Design system token replacements
+3. **MEDIUM and LOW Gaps: log, don't fix**
+   Record each as DEFERRED with a reason and a revisit trigger (spacing, shades, minor token swaps).
+   Exception: a missing ARIA attribute or keyboard path that blocks a user is an accessibility break — HIGH.
 
-4. **Fix LOW Gaps**
-   Quick fixes only:
-   - Skip anything requiring significant refactoring
-   - Note as DEFERRED with reason
+4. **Post-Fix Validation**
+   Tests selected for the files the fixes changed (`_shared-test-selection.md`), once; then the web
+   package's typecheck, lint and build. Fix any failures (max 3 attempts per failure).
 
-5. **Post-Fix Validation**
-   ```bash
-   cd admin-ui
-   npm test -- --passWithNoTests 2>/dev/null
-   npx tsc --noEmit 2>/dev/null
-   npm run build 2>/dev/null
-   npm run lint 2>/dev/null
-   ```
-   Fix any failures (max 3 attempts per failure).
-
-6. **Track Progress**
+5. **Track Progress**
    ```
    REMEDIATION: CRITICAL X/X | HIGH X/Y | MEDIUM X/Y | LOW X/Y (Z deferred)
    ```
@@ -320,19 +310,16 @@ Output: Gap list as DS-* codes, plus total checkpoint count.
 
 ### Phase 6: Verification Phase
 
-1. **Re-check Fixed Gaps**
+1. **Re-check Fixed Gaps (sweep 2 — the last)**
    For each gap marked FIXED:
-   - Read the file, confirm the change exists
-   - Verify the fix matches wireframe spec
+   - Re-take its screenshot pair and confirm the difference is gone
+   - Verify the fix matches the wireframe spec
    - Mark as VERIFIED
+   A blocking gap still open after this is reported open; do not start a third sweep.
 
 2. **Regression Check**
-   ```bash
-   cd admin-ui
-   npm test -- --passWithNoTests
-   npx tsc --noEmit
-   npm run build
-   ```
+   The selection for all files changed in this run (`test-select --since <start sha>`), once, plus the
+   web package's typecheck and build. No broad tier; no pass-with-no-tests setting.
 
 3. **Recalculate Score**
    - Recount gaps (only PENDING and DEFERRED remain)
@@ -559,12 +546,8 @@ Total improvement: +[X.X] points over [N] runs
 # Verify against specific wireframe
 /verify-ui design/wireframes/AdminUI/03_scale_modal.md
 
-# Multiple runs for iterative improvement
-/verify-ui  # Run 1: Score 72%
-# ... fix some gaps manually ...
-/verify-ui  # Run 2: Score 85% (+13)
-# ... more fixes ...
-/verify-ui  # Run 3: Score 95% (+10) - Grade A!
+# After a UI module lands (the score is tracked across runs for trend; it never gates)
+/verify-ui Dashboard
 ```
 
 ---
@@ -601,14 +584,15 @@ Total improvement: +[X.X] points over [N] runs
 ## Integration
 
 After running `/verify-ui`:
-- All CRITICAL, HIGH, MEDIUM, and LOW gaps are fixed automatically
+- CRITICAL, HIGH and normal-use gaps are fixed automatically (2 sweeps at most); MEDIUM and LOW are logged with reasons
+- Screenshot pairs for every screen state checked are saved and listed in the report
 - Tests, type-checking, and build are validated
 - Fixes are committed locally (not pushed)
 - Unfixable gaps are documented with reasons
 - **Gap report created** at `context/verification/ui-gap-report.md` with full scoring
 - **History updated** at `context/verification/ui-compliance-history.md` with run progression
 - **ui-mapping.md updated** with verification timestamp and compliance score
-- Re-run `/verify-ui` for another pass if deferred gaps remain or to track score improvement
+- Do not re-run to raise the score; re-run when the UI changes
 
 ## Context Sync Notes
 

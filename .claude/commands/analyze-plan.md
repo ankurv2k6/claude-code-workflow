@@ -1,5 +1,5 @@
 ---
-description: Deeply analyze the plan against requirements, context and final outcome. Checks completeness, security, logging, and testing. After analysis, prompts to select gap tiers to fix and auto-runs /implement-plan.
+description: Deeply analyze the plan against requirements, context and final outcome. Checks completeness, security, logging, testing and feasibility. After analysis, prompts to select gap tiers to fix and applies the fixes to the plan document itself; it never starts code (a multi-module plan goes on to /blueprint).
 ---
 # Analyze Plan Command
 
@@ -8,7 +8,7 @@ Analyze **the plan itself** for quality, completeness, feasibility, and infrastr
 ## Arguments
 - `$ARGUMENTS` - Path to plan file, or focus: `completeness`, `security`, `logging`, `testing`, `all`
 - `--no-fix` - Skip interactive gap resolution (Phase 6), output report only
-- `--timeout=<seconds>` - Per-agent timeout in seconds (default: 120). Total max wait = timeout × 2 for all agents.
+- `--deep` - Run the 5 specialist agents (one lens each) instead of the default 2.
 
 Use TodoWrite to track progress. **Launch parallel agents for Phase 3.**
 
@@ -36,13 +36,13 @@ Build agent context string (plan summary, components, endpoints, deps, stack). D
 
 ## Phase 3: Parallel Expert Analysis (5 Agents)
 
-**CRITICAL: Launch ALL 5 agents in a SINGLE message using background mode with timeouts.**
+**Default: 2 agents** (`~/.claude/commands/_shared-effort-budget.md`: every agent re-reads the plan, so fewer lenses per agent costs more):
+- **Agent A:** the Completeness and Feasibility checklists below;
+- **Agent B:** the Security, Logging and Testing checklists.
 
-### Agent Configuration (ALL agents)
-```
-run_in_background: true
-max_turns: 20              # Prevents infinite loops - agent stops after 20 API round-trips
-```
+**`--deep`:** launch the 5 specialist agents, one checklist each.
+
+Launch in one message, in the background, with effort high. No turn caps; completion comes by notification (`_shared-agent-timeout.md`). Each agent writes full findings to a scratch file and returns a short summary.
 
 ### Agent 1: Completeness
 ```
@@ -98,12 +98,10 @@ ROLLBACK (reversible? Feature flags? Blast radius?)
 Output: OUTCOME ALIGNMENT, FEASIBILITY, RISK LEVEL, gaps OUT-*/FEAS-*/RISK-*
 ```
 
-### Timeout & Collection Strategy
+### Completion & fallbacks
 
-See `_shared-agent-timeout.md`. Command-specific settings:
-- **AGENT_TIMEOUT**: 120000ms (120 seconds per agent), 240 seconds total ceiling
-- **Agents**: Completeness, Security, Logging, Testing, Feasibility
-- **Conservative default scores** for timed-out categories: Completeness 15/25 | Security 10/25 | Logging 10/25 | Testing 10/25 | Feasibility 10/25
+See `_shared-agent-timeout.md`.
+- **Conservative default scores** for a category whose agent failed or returned incomplete: Completeness 15/25 | Security 10/25 | Logging 10/25 | Testing 10/25 | Feasibility 10/25
 - **Fallbacks**: Completeness → "manual review required" | Security → "REQUIRES SECURITY REVIEW" (HIGH) | Logging → "logging audit incomplete" | Testing → "testing strategy needs manual review" | Feasibility → "feasibility analysis incomplete"
 
 ---
@@ -116,7 +114,7 @@ After all agents complete:
    ```json
    { "plan": "[PLAN_PATH]", "agents": { "completeness": { "score": X, "gaps": [...] }, "security": {...}, "logging": {...}, "testing": {...}, "feasibility": {...} }, "ts": "[ISO]" }
    ```
-2. **Context Compact**: Run `/compact`, read `context/scratch/analyze-scratch-*.json` to restore findings; continue to Phase 4.
+2. **State is on disk**: if your context is summarized, re-read `context/scratch/analyze-scratch-*.json`, then continue to Phase 4.
 3. Delete scratch file after Phase 5 report is printed.
 
 ---
@@ -169,7 +167,7 @@ NEXT: [single most important action]
 Rules: One line per gap. NEXT: one sentence max. Omit empty sections.
 **Note**: If any agent timed out, mark affected scores with `*`.
 
-**Context Compact**: Run `/compact`, re-read `[PLAN_PATH]` to recall the plan being analyzed; continue to Phase 6.
+**State is on disk**: if your context is summarized, re-read `[PLAN_PATH]` and the scratch file, then continue to Phase 6.
 
 ---
 
@@ -213,17 +211,17 @@ Create `context/remediation/plan-remediation-[name]-[timestamp].md`:
 
 Ensure `context/remediation/` directory exists.
 
-### 6C: Launch Implementation
+### 6C: Apply the Plan Updates
 
 ```
 REMEDIATION PLAN CREATED
 ========================
 File: context/remediation/plan-remediation-[name]-[timestamp].md
 Gaps: X (Critical: A, High: B, Medium: C, Low: D)
-Launching /implement-plan...
+Applying the plan updates...
 ```
 
-Use `Skill` tool: `skill: "implement-plan"`, `args: "context/remediation/plan-remediation-[name]-[timestamp].md"`
+Apply each **Plan Updates** item **directly to the plan document**, tick it in the remediation file, and re-check only the changed sections (at most 2 sweeps, `_shared-triage.md`). These are document edits: do not launch `/implement-plan`, and never start code from a remediation. A gap whose fix needs an owner decision becomes an Open Question (with its default) or an Owner Item in the plan.
 
 ### 6D: Post-Implementation Summary
 
@@ -241,7 +239,7 @@ RECOMMENDATION: Run /analyze-plan again to verify.
 REMEDIATION PARTIAL
 ===================
 Gaps Fixed: X/Y (Z remaining) | Status: [reason]
-NEXT: /implement-plan context/remediation/plan-remediation-[name].md
+NEXT: resolve the remaining items in context/remediation/plan-remediation-[name].md (owner decisions listed in the plan's Open Questions)
 ```
 
 ### 6E: Error Handling
@@ -249,7 +247,7 @@ NEXT: /implement-plan context/remediation/plan-remediation-[name].md
 | Failure | Action |
 |---------|--------|
 | Can't write remediation plan | Error, suggest alternative path |
-| /implement-plan fails | Error with reason, manual steps |
+| A plan update conflicts with an owner decision | Keep the decision; record the gap as an Open Question |
 | Blocked/interrupted | Partial progress, resume command |
 | Unclear input | Default to CRITICAL only |
 
@@ -270,7 +268,7 @@ NEXT: /implement-plan context/remediation/plan-remediation-[name].md
 ## Workflow Integration
 
 ```
-/plan → /analyze-plan → [auto-fix] → /implement-plan → /verify-implementation
+/plan → /analyze-plan → [plan updated] → /blueprint (multi-module) or /implement-plan (single feature)
               ↑____________↓
           (re-run to verify improvement)
 ```

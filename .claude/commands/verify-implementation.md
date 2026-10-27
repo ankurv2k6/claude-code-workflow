@@ -1,5 +1,5 @@
 ---
-description: Exhaustively verify implementation against current plan, identify gaps, fix all discovered issues, and ensure logging/testing infrastructure is complete. Supports three-layer blueprint system.
+description: Verify an implementation against its plan or module blueprint by running the code as well as reading it. Fixes CRITICAL, HIGH and normal-use findings and logs the rest, within 2 sweeps. 2 agents by default, 7 with --deep. Supports the three-layer blueprint system.
 ---
 # Verify Implementation Command
 
@@ -10,11 +10,13 @@ Verify implementation against the **current session's module** with gap analysis
 - `--force` - Force thorough verification even if module/plan is marked as completed in tracking documents
 - `--all` - Verify ALL implemented modules (scans `context/implementation-status.md` for completed modules). Without this flag, only the current/active module is verified.
 - `--stubs` - Focus mode: run ONLY Agent 6 (Stub/Placeholder Detection). Skips Agents 1-5. Still runs Phases 3-8 for consolidation and remediation.
-- `--status [module]` - Query-only mode. Reads `context/implementation-status.md` and registry. Displays stub verification status per module or all modules. Runs NO agents. When `--status` is active, all other flags (`--force`, `--stubs`, `--all`, `--timeout`) are ignored. Without a module argument, defaults to ALL. Validate module ID against `/^M(1[0-3]|[1-9])$/` or literal `ALL`. Reject invalid values with: `Invalid module ID: {input}. Use M1-M13 or ALL.`
+- `--status [module]` - Query-only mode. Reads `context/implementation-status.md` and registry. Displays stub verification status per module or all modules. Runs NO agents. When `--status` is active, all other flags (`--force`, `--stubs`, `--all`, `--deep`) are ignored. Without a module argument, defaults to ALL. Validate module ID against `/^M\d{1,3}[a-z]?$/` (and the registry's module list) or literal `ALL`. Reject invalid values with: `Invalid module ID: {input}. Use a module ID from the registry or ALL.`
 - `--skip-stub-gate` - When passed through from implement-plan or implement-batch, stub gate results are reported but do not block completion. **Not recommended** — available as escape hatch only. Note: This flag is consumed by implement-plan/implement-batch, not verify-implementation itself.
-- `--timeout=<seconds>` - Per-agent timeout in seconds (default: 120). Total max wait = timeout × 2 for all agents.
+- `--deep` - Run the 7 specialist agents (one checklist each) instead of the default 2 agents split by file ownership. Use for a final audit, not inside a batch.
 
-Use TodoWrite. **Launch parallel agents for Phase 2. Auto-fix all gaps without asking.**
+Use TodoWrite. **Launch the Phase 2 agents in one message. Fix CRITICAL, HIGH and normal-use findings without asking; log the rest with a reason** (`~/.claude/commands/_shared-triage.md`). **At most 2 sweeps:** this run is sweep 1; sweep 2 re-checks only the fixes (Phase 7).
+
+**Shared protocols:** `_shared-triage.md` (what blocks, how a verifier works), `_shared-ui-parity.md`, `_shared-test-selection.md`, `_shared-effort-budget.md`, `_shared-agent-timeout.md`, `_shared-commit-protocol.md` (all in `~/.claude/commands/`).
 
 ---
 
@@ -25,7 +27,8 @@ Use TodoWrite. **Launch parallel agents for Phase 2. Auto-fix all gaps without a
    - If `--all` in arguments: Set `ALL_MODE=true` — verify all implemented modules (see step 2b).
    - If `--stubs` in arguments OR bare `stubs` keyword: Set `STUBS_FOCUS=true` — run ONLY Agent 6 (Stub Scanner), skip Agents 1-5.
    - If `--status` in arguments: Set `STATUS_QUERY=true`, `STATUS_MODULE=<module-arg>|ALL` (default ALL if no module arg). Validate STATUS_MODULE against `/^M\d{1,3}[a-z]?$/` (and the registry's module list) or literal `ALL`. If invalid: reject with `Invalid module ID: {input}. Use a module ID from the registry or ALL.` **Short-circuit to Phase 1.5** — all other flags are ignored.
-   - If `--timeout=<N>` in arguments: Set `AGENT_TIMEOUT=N*1000` (convert to ms). Default: 120000ms (120 seconds).
+   - If `--deep` in arguments: Set `DEEP_MODE=true` — Phase 2 runs the 7 specialist agents.
+   - **On a lane branch** (a batch worktree, or any branch behind its integration branch): merge the integration branch in first and verify the result — verify what will merge (`_shared-triage.md`).
 
 2. **Find Plan(s)**:
 
@@ -129,17 +132,29 @@ Exit immediately — no Phase 2-8.
 
 ---
 
-## Phase 2: Parallel Analysis (7 Agents)
+## Phase 2: Analysis agents
 
-**Launch ALL 7 agents in a SINGLE message using background mode with timeouts.**
-**Note**: Agent 5 (UI/Mockup) only launches if `design/wireframes/` or `design/mockups/` exist.
-**Note**: If `STUBS_FOCUS=true`, launch Agents 6 AND 7 (Stubs + Contract Compliance). Mark Agents 1-5 as `[SKIPPED - STUBS FOCUS]`.
+**Default: 2 agents, split by file ownership** (`_shared-effort-budget.md`: never several agents over the same files). Each runs the checklists of the specialist agents below that fall in its half:
 
-### Agent Configuration (ALL agents)
-```
-run_in_background: true
-max_turns: 25              # Prevents infinite loops - agent stops after 25 API round-trips
-```
+| Agent | Owns | Runs the checklists of |
+|---|---|---|
+| **A — code** | source files, contracts, stubs | Agent 1 (implementation), Agent 6 (stubs), Agent 7 (contracts) |
+| **B — behaviour** | tests, runtime, UI | Agent 3 (testing), Agent 4 (security), Agent 2 (logging), Agent 5 (UI parity) |
+
+**`DEEP_MODE`:** launch the 7 specialist agents instead, one checklist each.
+**`STUBS_FOCUS`:** launch only Agent A, limited to the Agent 6 and Agent 7 checklists.
+**Agent 5's checklist** applies only if `design/wireframes/` or `design/mockups/` exist.
+
+**Configuration:**
+- Launch in one message, in the background, at effort `high` (role "Independent verifier"; a project or
+  user rule overrides). No turn caps.
+- Each agent writes its full findings to `context/scratch/verify-<agent>-[timestamp].md` and returns at
+  most 30 lines.
+- **Run the code as well as reading it** (`_shared-triage.md`):
+  - Agent B drives the UI in a real browser (`_shared-ui-parity.md`);
+  - it calls each external network path once against a real local socket;
+  - it sends one real request per route access class.
+- **Check a claim by running it before reporting it.**
 
 ### Agent 1: Implementation Verification
 ```
@@ -189,37 +204,24 @@ Output: SECURITY STATUS (PASS/CONCERNS), gaps SEC-* with severity
 subagent_type: "ui-designer"
 **Skip if**: No design/wireframes/ or design/mockups/ directories exist.
 
-Verify:
-  MOCKUP MATCHING (compare mockup HTML structure with React component output) |
-  DESIGN TOKENS (colors, spacing, fonts match design system values) |
-  STATE COVERAGE (all states from wireframe implemented: default, loading, error, empty, success) |
-  RESPONSIVE (breakpoints match wireframe spec) |
-  ACCESSIBILITY (WCAG elements from mockup preserved in implementation)
+Prove parity in a real browser per ~/.claude/commands/_shared-ui-parity.md:
+  For each screen the module owns, and each key state in its mockup's state list:
+    1. Screenshot the mockup (design/mockups/{Feature}/{screen}.html?state={state}) and the running
+       app in the same state, at 1440×900 unless the project sets another size
+    2. Compare the pair: structure, copy, states, missing or extra elements
+    3. Check the wireframe's Information decisions table: nothing it omits is shown
+  Also: theme tokens, not colour literals; accessibility attributes the mockup carries are preserved.
+  Re-take the implementer's pairs yourself for the main states; don't rely only on theirs.
+  No browser available → UI parity NOT PROVEN (an AUDIT-INCOMPLETE gap), never a pass.
 
-For each UI component:
-  1. Read corresponding mockup file (design/mockups/{Feature}/{XX}_*.html)
-  2. Read corresponding wireframe file (design/wireframes/{Feature}/{XX}_*.md)
-  3. Parse React component (src/components/*.tsx)
-  4. Compare:
-     - Element structure (div hierarchy, semantic HTML)
-     - CSS properties (colors as hex, padding, margins, fonts)
-     - Interactive states (hover, focus, disabled styles)
-     - All wireframe states implemented
-     - Responsive breakpoints
+UI PLACEHOLDERS (HIGH): "Coming soon", "TODO", "Lorem ipsum" in rendered text; empty render paths
+where the wireframe defines a state; colour literals instead of tokens.
 
-UI PLACEHOLDERS (CRITICAL severity):
-  - Inline styles with literal color values not from design system
-  - Text content: "Coming soon", "TODO", "Placeholder", "Lorem ipsum"
-  - Empty state handlers: `return null` or `return <></>` without proper UI
-  - Hardcoded dimensions not matching wireframe
-  - Missing states from wireframe (empty, loading, error, success)
-
-Output: UI compliance %, gaps UI-* with severity:
-  UI-STRUCT-*: Structure mismatch (CRITICAL)
-  UI-STYLE-*: Styling mismatch (HIGH if >3 properties, MEDIUM if 1-3)
-  UI-STATE-*: Missing state (CRITICAL)
-  UI-A11Y-*: Accessibility mismatch (HIGH)
-  UI-PLACEHOLDER-*: Placeholder content/styling (CRITICAL)
+Output: per screen, match or the differences, with screenshot pair paths; gaps UI-* with severity:
+  UI-STRUCT-*, UI-STATE-*, UI-COPY-*: a difference a user can see (HIGH)
+  UI-PLACEHOLDER-*: placeholder content or styling (HIGH)
+  UI-A11Y-*: accessibility regression (HIGH)
+  UI-STYLE-*: a few pixels of spacing or a shade (LOW, logged)
 ```
 
 ### Agent 6: Stub/Placeholder Detection
@@ -382,12 +384,10 @@ Each gap MUST include:
 Summary MUST include: `STUB GATE ELIGIBLE: [YES if Actionable==0 / NO]`
 ```
 
-### Timeout & Collection Strategy
+### Completion & fallbacks
 
-See `_shared-agent-timeout.md`. Command-specific settings:
-- **AGENT_TIMEOUT**: 120000ms (120 seconds per agent), 240 seconds total ceiling
-- **Agents**: Implementation, Logging, Testing, Security, UI (if assets exist), Stubs, Contract Compliance
-- **Fallbacks**: Implementation → list existing files | Logging → "audit incomplete" | Testing → select per `_shared-test-selection.md`, else run `npm test` directly | Security → "requires manual security review" | UI → "UI mockup compliance requires manual review" | Stubs → run `grep -rn "TODO\|FIXME\|STUB\|NotImplemented" <module-files>` | Contract → run `grep -n "Producer:.*\.ts" impl-contracts.md` and check file existence
+See `_shared-agent-timeout.md`: wait for completion notifications, no wall-clock ceilings, detect stalls.
+- **Fallbacks for an agent that fails or returns incomplete**: Implementation → list existing files | Logging → "audit incomplete" | Testing → select per `_shared-test-selection.md`, else run `npm test` directly | Security → "requires manual security review" | UI → "UI mockup compliance requires manual review" | Stubs → run `grep -rn "TODO\|FIXME\|STUB\|NotImplemented" <module-files>` | Contract → run `grep -n "Producer:.*\.ts" impl-contracts.md` and check file existence
 
 ---
 
@@ -399,7 +399,7 @@ After all agents complete and before consolidation:
    ```json
    { "plan": "[PLAN_PATH]", "agents": { "implementation": [...], "logging": [...], "testing": [...], "security": [...], "ui": [...], "stubs": [...], "contracts": [...] }, "ts": "[ISO]" }
    ```
-2. **Context Compact**: Run `/compact`, read `context/scratch/verify-scratch-*.json` to restore findings; continue to Phase 3.
+2. **State is on disk**: if your context is summarized, re-read `context/scratch/verify-scratch-*.json` and the agents' findings files, then continue to Phase 3.
 3. Delete scratch file after Phase 4 completes.
 
 ---
@@ -429,6 +429,7 @@ After all agents complete and before consolidation:
    - LOW: docs/edge cases, **STUB-EMPTY-* (module PENDING)**, **STUB-DEP-* (upstream PENDING)**
    - INFO: **STUB-MVP-* (intentional OUT-* stubs — tracked only, never remediated, NOT counted in SIGNIFICANT_GAPS)**
    - `AUDIT-INCOMPLETE-*` gaps are classified as HIGH (require manual follow-up)
+   - **Then apply `_shared-triage.md`:** any breach of the project's CRITICAL list (CLAUDE.md invariants and hard guardrails) is CRITICAL; anything that breaks normal use is treated as HIGH whatever its category. **SIGNIFICANT_GAPS = CRITICAL + HIGH** — these block. MEDIUM, LOW and edge cases are logged in Deferred findings with a reason and a revisit trigger, not fixed.
 
 5. **Gap Inventory**:
    ```
@@ -445,7 +446,7 @@ After all agents complete and before consolidation:
    ```
 
 6. **Statistics**: `GAPS: X CRITICAL, Y HIGH, Z MEDIUM, W LOW, I INFO (N total)`
-   - INFO gaps (STUB-MVP) are tracked but NOT counted toward SIGNIFICANT_GAPS for VERIFY-LOOP exit conditions
+   - INFO gaps (STUB-MVP) are tracked but NOT counted toward SIGNIFICANT_GAPS (which decide the verification PASS)
    - Include note if any agents timed out: `⚠️ X agent(s) timed out - results may be incomplete`
 
 ---
@@ -494,11 +495,12 @@ VERDICT: [READY FOR PR / NOT READY / INCOMPLETE - MANUAL REVIEW REQUIRED]
 See `_shared-autonomous.md`. Scope: ALL remediation fixes. Only report when remediation is complete.
 
 ### Fix Order
-1. **CRITICAL** (sequential): Read file, implement fix, run tests after each, resolve regressions
-2. **HIGH** (parallel where possible): Launch fix agents for independent fixes in single message
-3. **MEDIUM**: Direct fixes (logging, partial implementations)
-4. **LOW**: Quick fixes only; skip major refactoring (note as deferred)
-5. **INFO**: Do NOT fix — track only (STUB-MVP intentional stubs)
+1. **CRITICAL** (sequential): Read file, implement fix, run the selection for the fix, resolve regressions
+2. **HIGH and normal-use breaks**: fix directly. Launch a fix agent only for a large, independent fix (`_shared-effort-budget.md`)
+3. **MEDIUM and LOW**: do NOT fix — log each in Deferred findings with a reason and a revisit trigger
+4. **INFO**: Do NOT fix — track only (STUB-MVP intentional stubs)
+
+The per-category rules below say HOW to fix a finding once triage says it blocks. They do not make a MEDIUM finding blocking.
 
 ### Stub-Specific Remediation Rules
 
@@ -564,9 +566,10 @@ See `_shared-autonomous.md`. Scope: ALL remediation fixes. Only report when reme
 
 ### Post-Fix Validation
 
-**Tests: follow `_shared-test-selection.md`** — tier `standard`, because this validates a module
-rather than a single edit. Escalate to `full` if the fixes touched a shared contract, a database
-migration or the test harness itself.
+**Tests: follow `_shared-test-selection.md`** — the selection for the files the fixes changed
+(`--files`), once. If the selector escalates and you are inside a batch lane or verifier, do not run the
+escalated tier: run the related tests of the changed files plus the touched suites, and report
+"escalated, deferred". Standalone, an escalated tier runs once, here, not per fix.
 
 ```bash
 npx tsc --noEmit
@@ -581,7 +584,7 @@ Fix failures (max 3 attempts each).
 
 ## Phase 7: Post-Fix Verification
 
-1. **Re-run Gap Check**: Verify each fix in place, tests pass
+1. **Sweep 2 — re-check the fixes only**: verify each fix in place and the code it touched; tests for the delta pass. Do not re-audit the whole module. A CRITICAL or HIGH still open after this is reported as open (VERIFICATION FAILED for the module); a finding seen in both sweeps is logged as architectural. **Stop here** — there is no sweep 3.
 2. **Blueprint Mode Updates**: Stage gate status, regression history, deviation log, contract compliance, frozen schema timestamps
 3. **Commit Fixes** (see `_shared-commit-protocol.md`): Group related fixes, reference gap IDs:
    ```
@@ -606,6 +609,8 @@ Fix failures (max 3 attempts each).
 ---
 
 ## Phase 8: Context Sync
+
+**Inside a batch lane or as a batch verifier:** update only the plan file and the module blueprint's §11 Deviations; put everything else (status, registry, memory, deferred findings, owner items) in your report — the orchestrator writes shared state (`_shared-agent-tracking.md`). Standalone runs do all the steps below.
 
 1. **Update Plan File**: Add verification record to `## Implementation Progress`:
    ```
@@ -658,8 +663,7 @@ Fix failures (max 3 attempts each).
 /verify-implementation --stubs --all                      # Stub scan across all implemented modules
 /verify-implementation --force                            # Force re-verify even if marked complete
 /verify-implementation --status M2                        # Query stub gate status without running
-/verify-implementation --timeout=180                      # 180 second timeout per agent (default: 120)
-/verify-implementation --timeout=60 --all                 # Quick verification with shorter timeout
+/verify-implementation --deep                             # 7 specialist agents for a final audit
 /verify-implementation --status                            # Show stub gate status for all modules
 /verify-implementation --status M3                         # Show stub gate status for M3 only
 /verify-implementation --status ALL                        # Explicit all-modules status query
@@ -668,7 +672,7 @@ Fix failures (max 3 attempts each).
 ## Integration
 
 After running:
-- All gaps fixed automatically (CRITICAL/HIGH/MEDIUM/LOW)
+- CRITICAL, HIGH and normal-use findings fixed automatically, within 2 sweeps; MEDIUM and LOW logged with reasons
 - Stub gaps detected, fixed where possible, blocked stubs tracked with dependency notes
 - STUB-MVP (INFO) gaps tracked but never remediated (intentional post-MVP stubs)
 - Tests/types/build validated

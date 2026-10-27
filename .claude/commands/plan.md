@@ -128,7 +128,9 @@ If confirmed:
 
 ### Question Design Principles
 - Be specific, offer defaults, explain why, respect existing context
-- Max 3 question rounds, then proceed with defaults
+- **Ask in rounds of up to 4 questions, grouped by topic.** Keep asking while **owner-only** questions remain: business model, legal and consent, spend, vendors, production access. There is no fixed round cap; a large product can take 6 or more rounds.
+- **Drop any question whose default is safe and reversible.** Record that default as a **configurable setting with a key** (`key · default · where it is read`), never as hard-coded behaviour. "Assume a default" always means "a default someone can change later".
+- Record every answer in `context/plans/<set>/owner-decisions-<YYYY-MM-DD>.md`, one row per decision: question, answer, setting key and default if any, what it changes in the plan. The blueprint and the batch lanes cite this file.
 
 ### Question Templates (use AskUserQuestion)
 
@@ -189,6 +191,7 @@ If confirmed:
 ```markdown
 # Plan: [Name]
 **Generated**: [timestamp] | **Status**: 📝 Draft | **Source**: /plan
+**Branch**: [integration branch the work lands on] | **Production**: [what must not change, e.g. "production stays as is"] | **Decisions**: [owner-decisions file]
 
 ## 1. Executive Summary
 [2-3 sentences: what, for whom, key value]
@@ -227,7 +230,17 @@ As a [user], I want [action] so that [benefit]
 | Risk | Probability | Impact | Mitigation |
 
 ## 10. Open Questions
-- [ ] [Question] — default: [assumption]
+- [ ] [Question] — default: [assumption] — setting key: [key, if configurable]
+
+## 11. Owner Items
+Work only the owner can do, collected from the start rather than found at merge time: IAM grants,
+secrets, infrastructure applies, billing, vendor accounts, legal review, sign-offs.
+| Item | Needed by (phase/module) | Default until done |
+
+## 12. Release Cuts
+Milestones as release cuts (e.g. Beta, GA, On demand), each listing its modules with effort, so a batch
+can build one cut at a time.
+| Cut | Modules | Effort | Done when |
 
 ## Requirements Source
 - User Input: [original]
@@ -276,7 +289,7 @@ The `/analyze-plan` command:
 2. Generates maturity score (X/100)
 3. Identifies gaps by severity (CRITICAL/HIGH/MEDIUM/LOW)
 4. Prompts gap selection and auto-generates remediation plan
-5. Invokes `/implement-plan` to fix gaps
+5. Applies the remediation to the **plan document** (a single-phase plan may go straight to `/implement-plan`; a multi-module plan goes to `/blueprint` and never starts code from the remediation)
 
 **Iteration Guard**: After 3 runs without improvement → recommend manual review.
 
@@ -332,10 +345,10 @@ USER IDEA → /plan (this command)
   ├─ Phase 1.5: Research (optional)
   ├─ Phase 2-4: Q&A + Requirements + Generation
   ├─ Phase 5: User Review
-  ├─ Phase 6: /analyze-plan (auto) → gap detection → /implement-plan remediation
+  ├─ Phase 6: /analyze-plan (auto) → gap detection → remediation applied to the plan
   └─ Phase 7: Handoff
          ↓
-/recommend-agents → /blueprint → /design-ui → /implement-plan → /verify-implementation → /commit
+/recommend-agents → /blueprint → /design-ui → /implement-batch (multi-module) or /implement-plan → /commit
               └─ Output: design/wireframes/**/*.md, design/mockups/**/*.html
 ```
 

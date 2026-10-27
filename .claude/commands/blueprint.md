@@ -66,9 +66,10 @@ Write to `context/blueprints/blprnt-master.md`.
 | S10 | Milestone plan: weekly/phase with goal, modules, deliverables, done-when checklist |
 | S11 | Risks: per severity (HIGH/MEDIUM/LOW) with probability, impact, mitigation, trigger |
 | S12 | Post-MVP: scaling, out-of-scope, simplifications, rejected alternatives with trigger conditions |
-| S13 | Regression matrix: policy, cumulative suite table, cross-package risks |
+| S13 | Regression matrix: policy, the test map (`context/testing/test-map.mjs`; create it from `~/.claude/templates/testing/` if absent), cross-package risks, the migration journal-order check |
+| S14 | Invariants and guardrails: the project's must-never-break rules (each one a CRITICAL finding in verification) and its hard guardrails (live services, protected records, credentials, deploy branches). If CLAUDE.md has no `## Hard guardrails` section, propose one from `~/.claude/templates/CLAUDE-hard-guardrails.md` to the owner; never edit CLAUDE.md without confirmation |
 
-**Context Compact**: Run `/compact`, re-read `blprnt-master.md` to confirm generation complete; continue to Phase 4.
+**State is on disk:** if your context is summarized, re-read `blprnt-master.md` to confirm generation is complete, then continue to Phase 4.
 
 ---
 
@@ -107,10 +108,11 @@ Tables, columns, indexes
 
 ## 6. Implementation Plan
 TASK [N]: [Name] ([Xd], blocked by [M-ID])
-  Files: [paths] | AC: [criteria] | Impl: see impl-[M-ID] S4.[N]
+  Files: [paths] | AC: [criteria — REQUIRED per task, testable] | Impl: see impl-[M-ID] S4.[N]
+  Migrations: named `<next>_<module>_<name>.sql` — numbered at merge, never fixed here
 
 ## 7. Verification Playbook
-### 7A. Automated (exit 0)
+### 7A. Automated (exit 0) — targeted: name test files by path; use `test-select --files <paths>` / `--since <base>`, never "npm test"
 | # | Check | Command | Timeout | Pass |
 ### 7B. Manual
 - [ ] [observation]
@@ -145,7 +147,9 @@ ALL pass -> PROCEED / BLOCK
 5. UPDATE: Registry, commit
 ```
 
-**Context Compact**: Run `/compact`, glob `context/blueprints/blprnt-M*.md` to confirm module plans written; continue to Phase 5.
+**Manifest budget:** a module's MUST LOAD totals at most 14k tokens. UI detail goes in the impl spec and `ui-mapping`, linked from §4A, not pasted (`_shared-effort-budget.md`).
+
+**State is on disk:** if your context is summarized, glob `context/blueprints/blprnt-M*.md` to confirm the module plans are written, then continue to Phase 5.
 
 ---
 
@@ -163,15 +167,17 @@ Single source of truth for TypeScript interfaces, Zod schemas, event types. Code
 [Full TypeScript interface + Zod schema]
 ```
 
+**LOCKED** = 3 or more consumers, or part of a contract-first cycle between modules. LOCKED sections land as code in **Phase 0** before any lane starts, so consumers build against them instead of waiting for the producer. Their hashes go in the registry's Frozen Schema Watch.
+
 ### 5B: `impl-master.md`
 | Section | Content |
 |---------|---------|
-| S1 | Parallel workstream map: modules, start conditions, blockers, merge points |
+| S1 | **Lane map** for `/implement-batch`. **C0, Phase 0:** every LOCKED contract as code, plus every S5 stub. **C0-UI, when there are UI modules:** the theme port, every component used on 2+ screens, shared navigation, with their prop signatures. **Other lanes:** group modules that share files, at most 3 modules or about 8 screens each. Per lane: modules in order, waits on (merged or stubbed), worktree and branch name, test DB prefix, merge order |
 | S2 | Contract index: contract, section ref, producer, consumers, status |
-| S3 | Shared infrastructure patterns (defined once, referenced by specs) |
+| S3 | Shared infrastructure patterns (defined once, referenced by specs), incl. shared UI component props |
 | S4 | Cross-cutting decisions: error handling, naming, file org, imports |
-| S5 | Stub definitions for parallel work with replace instructions |
-| S6 | Integration checklist at merge points |
+| S5 | Stub definitions for parallel work with replace instructions (written into each stub as a code comment) |
+| S6 | Merge checklist: migration renumbering after merged ones + journal-order check, lockfile by reinstall, conflict-touched suites |
 | S7 | Module implementation order |
 
 ### 5C: `impl-[M-ID]-[module-name].md`
@@ -191,7 +197,7 @@ Single source of truth for TypeScript interfaces, Zod schemas, event types. Code
 ## 8. Parallel Notes (stubs from impl-master S5)
 ```
 
-**Context Compact**: Run `/compact`, glob `context/implementation/impl-*.md` to confirm impl specs written; continue to Phase 6.
+**State is on disk:** if your context is summarized, glob `context/implementation/impl-*.md` to confirm the impl specs are written, then continue to Phase 6.
 
 ---
 
@@ -227,7 +233,7 @@ Status: PENDING | IN_PROGRESS | COMPLETE | BLOCKED([M-ID])
 | Schema | Location | Hash | Verified | Status |
 ```
 
-**Context Compact**: Run `/compact`, read `blprnt-registry.md` header to confirm registry written; continue to Phase 7.
+**State is on disk:** if your context is summarized, read the `blprnt-registry.md` header to confirm the registry is written, then continue to Phase 7.
 
 ---
 
@@ -241,7 +247,10 @@ Status: PENDING | IN_PROGRESS | COMPLETE | BLOCKED([M-ID])
 - [ ] Playbooks have executable commands, gate criteria reference 7A/B/C
 - [ ] Registry counts match artifacts, frozen schema watch covers LOCKED contracts
 - [ ] impl-contracts covers all S7 contracts, impl-master S5 defines stubs
-- [ ] Context manifests have token estimates <3000, no duplication
+- [ ] Context manifests within 14k tokens each, no duplication (UI detail linked, not pasted)
+- [ ] Every task has its own acceptance criterion; §7A names test files by path
+- [ ] impl-master S1 lane map present (Phase 0 C0, C0-UI if UI, lanes ≤ 3 modules / ~8 screens)
+- [ ] Migrations are placeholders numbered at merge; master S14 lists invariants and guardrails
 
 **Output**: Create directories, save all files, print manifest with totals.
 
@@ -265,6 +274,14 @@ This ensures all blueprints are validated before proceeding to implementation.
 
 Skip generation. Run comprehensive verification instead.
 
+**Who verifies** (`_shared-effort-budget.md`, row "Spec verifier"):
+- **2 agents split by file ownership:**
+  - **A, central files:** master, registry, impl-master and impl-contracts, plus cross-module contracts and the lane map;
+  - **B, module files:** module blueprints, impl specs and UI completeness.
+- Both run in the background at effort high and write their findings to scratch files.
+- **Scripts first:** cross-refs exist, the S5 module count matches, frozen-schema hashes and the journal check are scripts, not agent reading.
+- **The coordinator (you)** merges the findings, applies the auto-fixes, and **checks any claim by running it before acting on it.** A verifier's "X is unsupported" is tested, not trusted.
+
 ### Verify Phase 1: Artifact Discovery
 Locate: `blprnt-master.md`, `blprnt-registry.md`, `blprnt-M*.md`, `impl-contracts.md`, `impl-master.md`, `impl-M*.md`
 If master/registry missing: CRITICAL GAP.
@@ -283,7 +300,8 @@ If master/registry missing: CRITICAL GAP.
 | Module blueprints | S0 manifest, S1 responsibility, S2 interface, S7 playbook, S12 pre-flight |
 | Impl specs | S1 manifest matches blueprint, S2 file map concrete, S4 full signatures |
 | Master | S3 justified, S5 complete, S7 stability status, S10 vertical slices |
-| Cross-cutting | Effort sums match, milestones cover all, manifests <3000 tokens, no placeholders |
+| Cross-cutting | Effort sums match, milestones cover all, manifests ≤ 14k tokens, no placeholders |
+| Batch readiness | impl-master S1 lane map (C0 Phase 0 when LOCKED contracts exist, C0-UI when UI modules exist, lanes ≤ 3 modules / ~8 screens); a per-task acceptance criterion; §7A test files named by path; migrations as `<next>_` placeholders; master S14 invariants and guardrails |
 
 ### Verify Phase 3b: UI Module Completeness (BLOCKING for UI Modules)
 

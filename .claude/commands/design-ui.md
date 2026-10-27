@@ -17,7 +17,7 @@ description: Generate detailed wireframes (Markdown + ASCII) from architecture o
 | `--verify` | Audit + auto-fix wireframes/mockups |
 | `--sync-blueprints` | Sync UI specs from wireframes/mockups back to blueprints |
 | `--guide` | Output Design Input Guide |
-| `--timeout=<seconds>` | Per-screen agent timeout in seconds (default: 90) |
+| `--areas=<n>` | Screens per area agent (default 3–6, grouped by feature) |
 
 **Mode detection**: Default = wireframes-only | `--with-mockups` = full | `--mockups-only` = mockups | `--verify` = verify | `--sync-blueprints` = enrich
 
@@ -85,78 +85,89 @@ Use existing breakpoints or defaults based on device target. Follow existing nam
 ### 2F: Checkpoint
 Present inventory for confirmation. If plan path provided (autonomous), proceed without confirmation.
 
+### 2G: The declutter brief (binding)
+Before any screen, write `design/wireframes/_<set>-brief.md` (or extend the project's existing one):
+- the owner's direction, in their words (audience, tone, "don't overload", reuse of the current style);
+- **three tiers:** **Show** (the main information for this page's job), **On demand** (one deliberate
+  action away: a drawer, a "Details" disclosure, a tooltip-free help line), **Omit** (not needed in
+  this context);
+- the shared patterns every screen reuses (navigation, confirms, empty and error states).
+
+Every wireframe then carries an **Information decisions** table, one row per item considered:
+
+| Item | Tier (Show / On demand / Omit) | Why, in this page's context |
+|---|---|---|
+
+Implementation adds nothing the table omits.
+
 ---
 
-## Phase 3: Wireframe Generation (Parallel)
+## Phase 3: Foundation first (shared assets)
+
+**Full or mockups mode.** One agent, run before any screen agent (`_shared-effort-budget.md`, row "Design
+foundation", effort high). It builds or extends:
+- the shared sheet(s): reuse the project's design system (`design/mockups/shared/css/*.css`); create
+  `design-system.css` only when none exists; never a second, competing sheet;
+- shared chrome and UI scripts (navigation, drawers, confirms, state switching) and realistic fixtures,
+  in `design/mockups/shared/js/`: vanilla JS with JSDoc, no frameworks.
+
+Every screen then builds on these, so screens match each other by construction.
+
+---
+
+## Phase 4: Wireframes by area
 
 See `_shared-autonomous.md`. **Skip in mockups-only mode.**
 
-### Agent Configuration
-```
-run_in_background: true
-max_turns: 15              # Prevents infinite loops per screen
-timeout: 90000             # 90 seconds per screen (configurable via --timeout)
-```
+Group screens into **areas of 3–6 screens** by feature or flow, and launch one background agent per
+area. Use effort medium (row "Design area"; a project or user rule overrides), with no turn cap and no
+wall-clock timeout. Completion comes by notification (`_shared-agent-timeout.md`). Each agent reads the
+brief and the foundation once, and reports in 15 lines or fewer.
 
-### Timeout & Collection Strategy
+Each wireframe includes:
+1. **Header:** screen, feature, type, audience, WCAG, version, date.
+2. **Information decisions table** (2G).
+3. **Layout:** an ASCII diagram (`─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼`) with dimensions.
+4. **Components:** ASCII sketches; specs (dimensions, padding, typography); all states.
+5. **Responsive:** breakpoint changes.
+6. **Accessibility:** WCAG level, contrast, keyboard navigation, ARIA, touch targets, focus indicators.
+7. **Interactions:** a state transition table.
+8. **Tokens:** references to CSS custom properties.
 
-See `_shared-agent-timeout.md`. Command-specific settings:
-- **AGENT_TIMEOUT**: 90000ms (90 seconds per screen, configurable via `--timeout`)
-- **Total ceiling**: 180 seconds (or 2x screen count x timeout)
-- **Recovery**: Timed-out wireframes saved with `_partial` suffix; re-run `/design-ui --module {Feature}` to regenerate
-
-Launch parallel agents per screen. Each wireframe includes:
-1. **Header**: Screen, feature, type, audience, WCAG, version, date
-2. **Layout**: ASCII diagram (`─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼`) with dimensions
-3. **Components**: ASCII, specs (dimensions, padding, typography), all states
-4. **Responsive**: Breakpoint changes
-5. **Accessibility**: WCAG level, contrast, keyboard nav, ARIA, touch targets, focus indicators
-6. **Interactions**: State transition table
-7. **Tokens**: CSS custom property references
-
-**Output**: `design/wireframes/{Feature}/{XX_screen}.md`
-Also generate `design/wireframes/{Feature}/README.md` per module.
-
-**Context Compact**: If `--with-mockups` or `--mockups-only` is active: run `/compact`, glob `design/wireframes/{Feature}/*.md` to confirm wireframes complete; continue to Phase 4.
+**Output:** `design/wireframes/{Feature}/{XX_screen}.md`, plus `design/wireframes/{Feature}/README.md`
+per module. State lives on disk: if your context is summarized, glob the wireframes and continue.
 
 ---
 
-## Phase 4: Mockup Generation (Parallel)
+## Phase 5: Mockups by area
 
-**Full mode (`--with-mockups`) or mockups-only only.**
-
-In mockups-only, read existing wireframes first.
-
-### Agent Configuration (same as Phase 3)
-```
-run_in_background: true
-max_turns: 20              # Mockups are more complex, allow more turns
-timeout: 120000            # 120 seconds per mockup (longer than wireframes)
-```
-
-### Timeout Handling
-See `_shared-agent-timeout.md`. Same strategy as Phase 3 with AGENT_TIMEOUT=120000ms.
-Partial mockups saved with `_partial.html` suffix. Continue with completed mockups even if some timeout.
+**Full mode (`--with-mockups`) or mockups-only.** In mockups-only, read the existing wireframes first.
+Use the same area agents and configuration as Phase 4.
 
 Each standalone HTML:
-- Tailwind CDN, project fonts, design system CSS
-- Interactive JS: validation (300ms debounce), button/loading/error states, modal management, transitions (respect prefers-reduced-motion)
-- Responsive matching wireframe breakpoints
-- Accessibility: semantic HTML5, ARIA, keyboard nav (Tab/Enter/Escape), focus trapping, skip-to-content
-- Realistic domain content (never lorem ipsum)
-- Navigation to adjacent screens, localStorage for state
+- **Styling:** the project's own design-system sheet(s) and fonts from Phase 3. Add Tailwind only if the
+  project already uses it.
+- **States the browser can reach:** every state in the wireframe is selectable with `?state=<name>`, and
+  the page lists its states (e.g. a `data-states` attribute or a states block). Design verify and
+  implementation parity drive these (`_shared-ui-parity.md`).
+- **Interactive JS:** validation (300ms debounce); button, loading and error states; modal and drawer
+  management; transitions that respect `prefers-reduced-motion`.
+- Responsive, matching the wireframe breakpoints.
+- **Accessibility:** semantic HTML5, ARIA, keyboard navigation (Tab, Enter, Escape), focus trapping,
+  skip-to-content.
+- Realistic domain content, never lorem ipsum.
+- Navigation to adjacent screens.
 
-**Output**: `design/mockups/{Feature}/{XX_screen}.html`, `index.html`, `README.md`
+**Output:** `design/mockups/{Feature}/{XX_screen}.html`, `index.html`, `README.md`.
 
----
+### 5b: Consolidation pass
+One agent reconciles across areas: shared components used the same way, copy and terminology
+consistent, every screen in `INDEX.md`, the brief's Omit tier respected. Areas written in parallel drift;
+this catches it before `--sync-blueprints`.
 
-## Phase 5: Shared Assets
-
-**Full/mockups mode only. Create only if needed.**
-
-- New design system: `design/mockups/shared/css/design-system.css` with tokens, reset, typography, components
-- Extensions: Follow existing structure, add only missing
-- Shared JS: `design/mockups/shared/js/{module}.js` — vanilla, JSDoc, no frameworks
+### 5c: Accessibility check
+A **separate** agent from the one that chose colours (row "Accessibility check") verifies AA contrast and
+keyboard completeness on the mockups.
 
 ---
 
@@ -185,37 +196,25 @@ Each standalone HTML:
 Catalog wireframes (`design/wireframes/**/*.md`), mockups (`design/mockups/**/*.html`), design rules.
 If none found: abort, suggest running `/design-ui` first.
 
-### VB: Plan Coverage Audit (Parallel)
+**Agents for verify mode** (`_shared-effort-budget.md`):
+- **2 verifiers split by file ownership:** one for wireframes plus plan coverage, one for mockups. Never one agent per file.
+- **Plus the separate accessibility check** (5c).
+- Background, no turn caps or timeouts, completion by notification (`_shared-agent-timeout.md`).
+- Structural checks (file exists, every screen in `INDEX.md`, relative paths resolve) are a script, not an agent.
 
-**Agent Configuration**:
-```
-run_in_background: true
-max_turns: 10
-timeout: 60000  # 60 seconds for coverage audit
-```
+### VB: Plan Coverage Audit
 
-Build Screen Registry from plan. For each feature folder, cross-reference: `COVERED | MISSING | STUB`
+Build Screen Registry from plan. For each feature folder, cross-reference: `COVERED | MISSING | STUB`. A screen with no Information decisions table is a STUB.
 
-**Timeout Handling**: If coverage audit times out, flag as `AUDIT-INCOMPLETE` and proceed with per-file audit.
+### VC: Per-File Deep Audit
 
-### VC: Per-File Deep Audit (Parallel)
-
-**Agent Configuration**:
-```
-run_in_background: true
-max_turns: 15
-timeout: 90000  # 90 seconds per file audit
-```
-
-**Timeout Handling**:
-- Timed-out file audits marked as `[AUDIT INCOMPLETE]`
-- Include partial findings captured before timeout
-- Flag for manual review
+An agent that cannot finish marks its remaining files `[AUDIT INCOMPLETE]`, with the partial findings it has, for manual review.
 
 **Wireframes (.md)**:
 | Check | Severity |
 |-------|----------|
 | Header present | WARNING |
+| Information decisions table present (2G) | CRITICAL |
 | ASCII diagram valid | CRITICAL |
 | Component specs complete | WARNING |
 | All states documented | WARNING |
@@ -232,6 +231,8 @@ timeout: 90000  # 90 seconds per file audit
 | Focus trapping | CRITICAL |
 | Color contrast | CRITICAL |
 | Loading/error states | WARNING |
+| Every wireframe state reachable via `?state=` | CRITICAL |
+| Uses the project's shared sheet, no competing styles | WARNING |
 | prefers-reduced-motion | WARNING |
 | Relative paths valid | CRITICAL |
 
@@ -241,44 +242,29 @@ Compile Issue Registry. Launch fix agents for CRITICAL/WARNING. Fix constraints:
 ### VF-G: Coverage Gaps & Post-Fix
 Ask user about MISSING screens. Re-scan to confirm CRITICAL resolved.
 
-### VH: Implementation Comparison (if src/components/ exists)
+### VH: Implementation Comparison (if the app implements these screens)
 
-**Compare mockups against actual implementation:**
+**Compare the running app with the mockups in a real browser**, per `~/.claude/commands/_shared-ui-parity.md`. Do not parse JSX against mockup HTML; that comparison passed defects that showed only in a browser.
 
-For each mockup in `design/mockups/{Feature}/`:
-  1. Find corresponding component: `src/components/{Component}.tsx`
-  2. If not found: report `IMPL-MISSING`
-  3. If found, compare:
-
-**Structure Check**:
-- Parse mockup HTML structure
-- Parse React component JSX
-- Compare element hierarchy
-- Report: `IMPL-STRUCT-*` for mismatches
-
-**Style Check**:
-- Extract inline styles and CSS classes from mockup
-- Extract inline styles from React component
-- Compare CSS values (colors, spacing, fonts)
-- Report: `IMPL-STYLE-*` for mismatches (severity based on count)
-
-**State Check**:
-- List states from wireframe (default, loading, error, empty, success, disabled)
-- Check if component handles each state
-- Report: `IMPL-STATE-*` for missing states
+For each mockup in `design/mockups/{Feature}/` with an implemented screen:
+  1. No implementation found: report `IMPL-MISSING`.
+  2. Otherwise, for each key state: screenshot the mockup (`?state=<s>`) and the app in the same state.
+  3. Compare the pair:
+     - structure and copy (`IMPL-STRUCT-*`);
+     - states, missing or broken (`IMPL-STATE-*`);
+     - spacing and shade (`IMPL-STYLE-*`, LOW).
 
 **Output format**:
 ```markdown
-| Component | Mockup | Structure | Styles | States | Status |
-|-----------|--------|-----------|--------|--------|--------|
-| ConnectGitHub | 01_connect_github.html | ✅ | ✅ | 4/4 | COMPLETE |
-| IssueCard | 02_linked_issues_list.html | ✅ | ⚠️ 2 gaps | 3/4 | PARTIAL |
-| CreateModal | 03_create_issue_modal.html | ❌ | - | - | MISSING |
+| Screen | Mockup | States compared | Structure | States | Style | Pairs | Status |
+|--------|--------|-----------------|-----------|--------|-------|-------|--------|
+| Connect | 01_connect.html | 4 | ✅ | 4/4 | ✅ | parity/01-*.png | COMPLETE |
+| Issue list | 02_issues.html | 3 | ✅ | 2/3 | ⚠️ LOW | parity/02-*.png | PARTIAL |
 ```
 
-**Auto-fix suggestions**:
-- For `IMPL-STYLE-*` gaps: suggest CSS corrections with exact values from mockup
-- For `IMPL-STATE-*` gaps: list missing state handlers with expected behavior
+**Fix suggestions** (triage per `_shared-triage.md`):
+- `IMPL-STRUCT-*` and `IMPL-STATE-*` are HIGH: give the missing element or state handler and its expected behaviour.
+- `IMPL-STYLE-*` is LOW: log it, and suggest the theme token (never a hex literal).
 
 ### VI: Blueprint Enrichment Mode (`--sync-blueprints`)
 
@@ -309,8 +295,8 @@ For each wireframe in `design/wireframes/{Feature}/*.md`:
 #### 3. Extract UI Specifications from Mockups
 For each mockup in `design/mockups/{Feature}/*.html`:
 
-**Parse and extract**:
-- Exact CSS values (colors as hex, spacing in px/rem)
+**Parse and extract** (as **theme tokens**, never raw hex: map each value to the token the shared sheet defines; a value with no token is a design-system gap to report, not a literal to copy):
+- Colour, spacing and type tokens used
 - Font families, sizes, weights
 - Border radii, shadows
 - Transition/animation durations
@@ -320,26 +306,24 @@ For each mockup in `design/mockups/{Feature}/*.html`:
 
 #### 4. Update Blueprint §4 (Component Specifications)
 
-Inject extracted specs into blueprint component section:
+Inject extracted specs into blueprint component section. **Link the wireframe; don't copy it.** Copied ASCII trees and style objects pushed module manifests past budget (`_shared-effort-budget.md`: 14k tokens per module); keep §4A to what implementation needs at a glance:
 
 ```markdown
 ### Component: {ComponentName}
 
-**Source**: design/wireframes/{Feature}/{XX}_{component}.md
-**Mockup**: design/mockups/{Feature}/{XX}_{component}.html
+**Source**: design/wireframes/{Feature}/{XX}_{component}.md (layout, Information decisions)
+**Mockup**: design/mockups/{Feature}/{XX}_{component}.html — states: default, loading, error, empty
 
-#### Element Structure
-```
-{extracted ASCII hierarchy from wireframe}
-```
+#### Show items (from the Information decisions table)
+- {item} · {item} — On demand: {item} — Omitted: {item}
 
 #### Design Tokens
-| Property | Value | Source |
+| Property | Token | Source |
 |----------|-------|--------|
-| Background | #FFFFFF | mockup line 45 |
-| Primary Text | #2F3941 | mockup line 52 |
-| Padding | 16px 20px | wireframe §Layout |
-| Border Radius | 4px | mockup line 48 |
+| Background | --surface | mockup |
+| Primary Text | --ink | mockup |
+| Padding | --space-4 / --space-5 | wireframe §Layout |
+| Border Radius | --radius-sm | mockup |
 
 #### States
 | State | Trigger | Visual Changes |
@@ -381,35 +365,20 @@ For each component task, add precise implementation details:
    - Body: `<div>` with form content
    - Footer: `<footer>` with action buttons
 
-2. Exact Styles (from mockup):
-   ```typescript
-   const styles = {
-     container: {
-       backgroundColor: '#FFFFFF',
-       borderRadius: '8px',
-       boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2)',
-       maxWidth: '480px',
-       padding: '20px 24px',
-     },
-     // ... all styles from mockup
-   };
-   ```
+2. Styles: the shared components and theme tokens named in the blueprint's Design Tokens table. No colour literals.
 
-3. States to Implement:
+3. States to Implement (each reachable in the mockup with `?state=`):
    - [ ] Default state
    - [ ] Loading state (spinner, disabled form)
    - [ ] Error state (error banner, field highlights)
    - [ ] Success state (checkmark animation, auto-close)
 
 4. Interactions:
-   - Hover: button background #F8F9F9
-   - Focus: outline 2px solid #1f73b7
-   - Disabled: opacity 0.6, cursor not-allowed
+   - Hover / focus / disabled: as the shared components and tokens define them
 
 **Completion Criteria**:
-- [ ] All elements from mockup present
-- [ ] All CSS values exact match
-- [ ] All 4 states implemented
+- [ ] All Show items from the Information decisions table present; nothing it omits
+- [ ] Screenshot pairs (mockup vs app) match in every state above (`_shared-ui-parity.md`)
 - [ ] All interactions work
 - [ ] Accessibility verified
 ```
@@ -432,7 +401,8 @@ Create `context/implementation/ui-mapping.md`:
 
 After enrichment, verify:
 - [ ] All wireframe components have blueprint entries
-- [ ] All mockup styles are captured in impl specs
+- [ ] All mockup styles map to theme tokens in the blueprints (gaps reported, not copied as literals)
+- [ ] Each UI module's manifest stays within budget (detail linked, not copied)
 - [ ] All states from wireframes are listed in tasks
 - [ ] No placeholder or TBD sections remain
 
@@ -445,7 +415,7 @@ Wireframes analyzed: 2
 Mockups analyzed: 2
 Blueprint sections updated: 3
 Impl spec tasks enriched: 4
-CSS properties extracted: 47
+Tokens mapped: 47 (gaps: 0)
 States documented: 8
 
 SYNC STATUS: ✅ COMPLETE
@@ -465,11 +435,12 @@ Blueprint now contains precise UI specifications from finalized designs.
 ```
 DESIGN UI REPORT
 PROJECT: [name] | PLAN: [path] | MODE: [mode] | DATE: [timestamp]
-Agents: Wireframes X✓ Y⚠ Z✗ | Mockups X✓ Y⚠ Z✗
-(If timeouts: "Partial files saved with _partial suffix. Re-run to complete.")
+Agents: Foundation ✓ | Areas X✓ Y⚠ | Consolidation ✓ | A11y ✓
+(If an area agent failed: "Area {name} incomplete; re-run /design-ui --module {Feature}")
 
 DELIVERABLES
-  Wireframes: X files (Y partial) | Mockups: Z files (W partial) | Shared: N files | Docs: M files
+  Wireframes: X files | Mockups: Z files (states reachable via ?state=) | Shared: N files | Docs: M files
+  Brief: design/wireframes/_<set>-brief.md | Information decisions tables: X/X
   Screens: X (A pages, B modals, C dialogs) | States: Y
 
 COMPLIANCE: WCAG [level] | Breakpoints: [list]
@@ -478,7 +449,7 @@ VERIFY MODE (if applicable)
   Audited: X wireframes, Y mockups | Issues: A CRITICAL, B WARNING, C INFO
   Auto-fixed: A'/B'/C' | Manual review: [count]
   Coverage: N/M screens | Missing generated: [list]
-  Timeouts: X file audits incomplete (if any)
+  Incomplete audits: X files (if any)
 ```
 
 ---
@@ -493,6 +464,9 @@ VERIFY MODE (if applicable)
 6. **Realistic content** — never lorem ipsum
 7. **Standalone files** — each HTML works directly
 8. **Safety-first** — compliance rules are non-negotiable
+9. **Declutter by decision** — every item is Show, On demand or Omit, decided per page (2G)
+10. **Foundation first, then areas** — shared sheets and chrome before any screen; one agent per area, not per screen
+11. **States are addressable** — every state reachable with `?state=`, so parity can be proven in a browser
 
 ---
 
