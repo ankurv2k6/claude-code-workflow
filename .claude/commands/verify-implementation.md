@@ -24,7 +24,7 @@ Use TodoWrite. **Launch parallel agents for Phase 2. Auto-fix all gaps without a
    - If `--force` in arguments: Set `FORCE_MODE=true` — ignore completion status in `context/implementation-status.md`, registry stage gates, and plan progress markers. Treat ALL items as requiring verification.
    - If `--all` in arguments: Set `ALL_MODE=true` — verify all implemented modules (see step 2b).
    - If `--stubs` in arguments OR bare `stubs` keyword: Set `STUBS_FOCUS=true` — run ONLY Agent 6 (Stub Scanner), skip Agents 1-5.
-   - If `--status` in arguments: Set `STATUS_QUERY=true`, `STATUS_MODULE=<module-arg>|ALL` (default ALL if no module arg). Validate STATUS_MODULE against `/^M(1[0-3]|[1-9])$/` or literal `ALL`. If invalid: reject with `Invalid module ID: {input}. Use M1-M13 or ALL.` **Short-circuit to Phase 1.5** — all other flags are ignored.
+   - If `--status` in arguments: Set `STATUS_QUERY=true`, `STATUS_MODULE=<module-arg>|ALL` (default ALL if no module arg). Validate STATUS_MODULE against `/^M\d{1,3}[a-z]?$/` (and the registry's module list) or literal `ALL`. If invalid: reject with `Invalid module ID: {input}. Use a module ID from the registry or ALL.` **Short-circuit to Phase 1.5** — all other flags are ignored.
    - If `--timeout=<N>` in arguments: Set `AGENT_TIMEOUT=N*1000` (convert to ms). Default: 120000ms (120 seconds).
 
 2. **Find Plan(s)**:
@@ -155,7 +155,7 @@ Output: Per-feature status (COMPLETE/PARTIAL/MISSING), gaps IMP-*
 
 ### Agent 2: Logging Infrastructure
 ```
-subagent_type: "architect-reviewer"
+subagent_type: "architect-reviewer"  # if not installed in .claude/agents/, use "code-reviewer" (architectural fit)
 Audit: ENTRY POINTS (request/response on all API routes) |
 ERROR PATHS (all try/catch log with context + stack, flag silent swallowing) |
 CRITICAL OPS (DB, external APIs, auth, file system, background jobs) |
@@ -387,7 +387,7 @@ Summary MUST include: `STUB GATE ELIGIBLE: [YES if Actionable==0 / NO]`
 See `_shared-agent-timeout.md`. Command-specific settings:
 - **AGENT_TIMEOUT**: 120000ms (120 seconds per agent), 240 seconds total ceiling
 - **Agents**: Implementation, Logging, Testing, Security, UI (if assets exist), Stubs, Contract Compliance
-- **Fallbacks**: Implementation → list existing files | Logging → "audit incomplete" | Testing → run `npm test` directly | Security → "requires manual security review" | UI → "UI mockup compliance requires manual review" | Stubs → run `grep -rn "TODO\|FIXME\|STUB\|NotImplemented" <module-files>` | Contract → run `grep -n "Producer:.*\.ts" impl-contracts.md` and check file existence
+- **Fallbacks**: Implementation → list existing files | Logging → "audit incomplete" | Testing → select per `_shared-test-selection.md`, else run `npm test` directly | Security → "requires manual security review" | UI → "UI mockup compliance requires manual review" | Stubs → run `grep -rn "TODO\|FIXME\|STUB\|NotImplemented" <module-files>` | Contract → run `grep -n "Producer:.*\.ts" impl-contracts.md` and check file existence
 
 ---
 
@@ -563,8 +563,12 @@ See `_shared-autonomous.md`. Scope: ALL remediation fixes. Only report when reme
 - These are tracked in status files for future resolution
 
 ### Post-Fix Validation
+
+**Tests: follow `_shared-test-selection.md`** — tier `standard`, because this validates a module
+rather than a single edit. Escalate to `full` if the fixes touched a shared contract, a database
+migration or the test harness itself.
+
 ```bash
-npm test 2>/dev/null || npx vitest run
 npx tsc --noEmit
 npm run build 2>/dev/null
 ```
@@ -618,7 +622,7 @@ Fix failures (max 3 attempts each).
 3. **Update Blueprint Registry** (if `BLUEPRINT_MODE=true`) — update `context/blueprints/blprnt-registry.md`:
    - **YAML frontmatter**: Update `modules_complete` count, `last_updated`, `status` (if all modules done → `complete`), `current_phase`
    - **Module Status Table**: Upsert row — Status (`COMPLETE`/`IN_PROGRESS`), Gate (from gate check results), Tests (from test run), Coverage (from coverage report), Impl Files (created/expected), Deviations (count), Last Updated (today)
-   - **Overall Status table**: Update aggregate metrics (Modules Complete X/14, Regression Suite test totals)
+   - **Overall Status table**: Update aggregate metrics (Modules Complete X/{modules_total from the registry frontmatter}, Regression Suite test totals)
    - **Stage Gate Status**: If verification passed all checks for a gate, update gate section checks to PASS with command and date
    - **Implementation Progress**: Update Created vs Expected file counts for this module
    - **Contract Compliance Matrix**: Mark contracts produced by this module as Impl Status=`COMPLETE`, Integration Verified=`Yes`

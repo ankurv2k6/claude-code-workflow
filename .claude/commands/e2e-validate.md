@@ -370,7 +370,7 @@ For EVERY non-passing test:
 **Step 4 — Rerun and verify**
 - Rerun the fixed test
 - Run any existing tests in the affected module to confirm no regressions
-- If the fix touches a contract or shared module, run `pnpm test` across all packages to check for ripple effects
+- If the fix touches a contract or shared module, widen per `_shared-test-selection.md` (tier `standard`, or `full` for a shared contract) rather than running every package by hand
 
 ### 4.4 Fix-Rerun Loop
 
@@ -381,16 +381,20 @@ FOR EACH failing test:
     1. Root-cause the failure
     2. Fix at source (any module)
     3. Rerun the test
-    4. If fix touched shared code: run affected packages' test suites
+    4. If fix touched shared code: select the affected suites per `_shared-test-selection.md`
     5. attempts++
   IF still failing after 3 attempts:
     Mark as UNRESOLVED with full diagnosis
 ```
 
-**Cross-module regression check**: After all fixes are applied, run the full test suite for every module that had source code changes:
+**Cross-module regression check**: After all fixes are applied, re-verify every module that had
+source changes. Follow `_shared-test-selection.md` — one selected run covers all of them, and in a
+monorepo it is both faster and wider than looping per package (it catches the reverse edges, where
+a test in package A breaks because package B changed):
+
 ```bash
-# For each modified package
-cd packages/[modified-package] && pnpm test
+node scripts/test-select.mjs --tier standard --run   # mapped projects
+# unmapped: for each modified package → cd packages/[pkg] && pnpm test
 ```
 
 ### 4.5 Fix Tracking

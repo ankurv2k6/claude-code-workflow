@@ -120,6 +120,20 @@ fi
 
 **On failure**: Fix errors before committing. Do NOT skip with `--no-verify`.
 
+#### 2f-bis. Test map (only if the project has one)
+
+A static consistency check, not a test run — it executes no tests and needs no database, and takes
+well under a second. It fails when a test file exists that no group in the map claims, which would
+otherwise make that file invisible to every narrowed run from here on.
+
+```bash
+if [ -f "context/testing/test-map.mjs" ]; then
+  node scripts/test-map.mjs --check
+fi
+```
+
+**On failure**: fix `context/testing/test-map.mjs`, then `pnpm test:map --sync`.
+
 #### 2g. Explicit Exclusions
 
 **DO NOT run during commit**:
@@ -129,14 +143,15 @@ fi
 - E2E tests
 - Build processes (`npm run build`)
 
-Tests should run in CI/CD pipelines, not blocking local commits.
+Tests should run in CI/CD pipelines, not blocking local commits. (`test:map --check` in 2f-bis is
+not an exception: it runs no tests.)
 
 ### Step 3: Generate Commit Message
 
 See `_shared-commit-protocol.md` for format (Conventional Commits), types, HEREDOC pattern, and subject rules.
 
 **Command-specific additions**:
-- **Scopes**: `M0`-`M9`, `auth`, `character`, `story`, `scene`, `api`, `ui`
+- **Scopes**: the module ID being committed (e.g. `m16`) or a package/app name (e.g. `campaigns`, `api`, `web`, `db`)
 - Include `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line before Co-Authored-By
 
 ### Step 4: Stage & Commit

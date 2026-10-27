@@ -16,6 +16,20 @@ Use TodoWrite to track progress. **Launch parallel agents for independent analys
 
 ### Phase 1: Discovery and Asset Location
 
+> **Project path resolution (read first).** The paths, file names and MUI checks below come from the project this
+> command was written for (`admin-ui/`, `design/*/AdminUI/`). Resolve them per project:
+> - **If `admin-ui/` exists**: use the paths as written.
+> - **Otherwise**, discover from the repo:
+>   - wireframes = `design/wireframes/<Feature>/NN_*.md`
+>   - mockups = `design/mockups/<Feature>/*.html` (a shared `shared/` folder is not a feature)
+>   - implementation = the web app's source (e.g. `apps/web/src/{routes,features,components}/**`)
+>   - theme = the project's token file (e.g. `apps/web/src/theme/design-system.css`)
+>   - tests = the web package's test script (e.g. `pnpm --filter @idn/web test`; Playwright via `pnpm test:e2e`)
+> - **Component library**: verify against whatever the project's design-system doc names (e.g.
+>   `design/wireframes/_design-system.md`, `_phase2-components.md`). Skip MUI-specific checks when MUI is not imported,
+>   and score "Design System" against the project's own tokens and classes.
+> - **Scope**: when invoked by `/implement-plan` for one module, verify only the screens that module's blueprint lists.
+
 1. **Locate Design Assets**
    ```
    Wireframes: design/wireframes/AdminUI/*.md

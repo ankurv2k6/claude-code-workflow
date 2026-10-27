@@ -287,7 +287,7 @@ implementation specs are complete and precise.
 
 **Trigger**: `--sync-blueprints` flag OR automatic when `--verify` finds UI modules
 
-**For each UI module (M8-M12 typically)**:
+**For each UI module (blueprint declares `type: ui`)**:
 
 #### 1. Locate Blueprint Files
 - Blueprint: `context/blueprints/blprnt-{M-ID}-{name}.md`

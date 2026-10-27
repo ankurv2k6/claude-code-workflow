@@ -57,7 +57,7 @@ else:
 Validate blprnt-master.md:
   1. YAML frontmatter: required fields (blueprint, version, status)
      Max file size: 100KB | No symlinks
-  2. Module ID validation: /^M(1[0-3]|[1-9])$/ + registry lookup
+  2. Module ID validation: /^M\d{1,3}[a-z]?$/ + registry lookup (any module the registry lists, e.g. M1–M13 or M16–M22)
   3. Path traversal validation:
      - Resolve path against projectRoot
      - Reject if !startsWith(projectRoot)
@@ -104,7 +104,9 @@ If cycle: FATAL "Circular dependency: {cycle path}"
 ```
 if design/wireframes/ exists:
   UI_ASSETS=true
-  Map wireframes to modules (M8-M12)
+  Map wireframes to UI modules: a module is a UI module when its blueprint header declares `type: ui`
+  (e.g. `**type: ui**`); its wireframe/mockup folders are every `design/wireframes/<Feature>/` and
+  `design/mockups/<Feature>/` its blueprint §4 / "UI Design Sync" table names
 ```
 
 ### 6b. Configure UI Module Requirements
@@ -112,7 +114,7 @@ if design/wireframes/ exists:
 **If UI_ASSETS=true for any module, add UI-specific configuration:**
 
 ```
-For each UI module (typically M8-M12):
+For each UI module (blueprint declares `type: ui`):
   Set UI_VERIFICATION_REQUIRED=true
   Add to module config:
     - wireframe_path: design/wireframes/{Feature}/
@@ -357,7 +359,7 @@ For each chunk:
 
       timeout: 1800000  # 30 minutes per module (configurable via --timeout)
       run_in_background: true
-      max_turns: 100    # Prevents infinite loops
+      max_turns: 400    # Prevents infinite loops (raised from 100: large modules + 5-pass verify loop)
 
   # Collect results with timeout handling
   For each agent in chunk:
@@ -524,6 +526,9 @@ Else:
 > 1. **Every module** was implemented via `/implement-plan`
 > 2. **Every module** completed its verify-loop with ✅ PASS (1 clean run)
 > 3. Cross-module integration verification passes
+> 4. A **`full`-tier** test run is green (`_shared-test-selection.md`). Per-module runs are
+>    narrowed by design, so no combination of them is a whole-suite result — the batch gate is the
+>    one place the full suite must actually run.
 >
 > If **ANY module** has ❌ VERIFICATION_FAILED (5 iterations exhausted), the batch is ❌ **BATCH FAIL**.
 > BLOCKED and FAILED modules also result in ❌ **BATCH FAIL**.

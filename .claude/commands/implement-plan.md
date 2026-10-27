@@ -84,8 +84,11 @@ Evidence for significant items:
 ```
 
 ### Step 4: Lightweight Verification
+
+**Tests: follow `_shared-test-selection.md`.** Use tier `quick` here — this runs after every item,
+so it is the step whose cost compounds.
+
 ```bash
-npm test 2>/dev/null || npx vitest run        # Tests
 npx tsc --noEmit                               # Types
 npm run lint 2>/dev/null || npx eslint .       # Lint
 npm run build 2>/dev/null                      # Build
@@ -181,7 +184,7 @@ WHILE ITERATION < MAX_ITERATIONS:
     6. If gaps found, auto-fix:
        - Read affected files
        - Implement fixes for all Critical, High, Medium gaps
-       - Run tests to verify fixes
+       - Run tests to verify fixes — tier `quick` per `_shared-test-selection.md`
        - Commit fixes:
          fix([scope]): address verify-implementation gaps [GAP-IDs]
 
@@ -387,7 +390,7 @@ ACTION REQUIRED: Fix actionable stubs or run with --skip-stub-gate
 - [ ] NEVER ask permission — execute autonomously
 - [ ] Mark items complete IN THE PLAN FILE immediately after each
 - [ ] Capture commit SHA on every item
-- [ ] Run tests after EVERY phase
+- [ ] Run tests after EVERY phase — selected per `_shared-test-selection.md`, not the full suite
 - [ ] Fix test failures before proceeding
 - [ ] **EXECUTE VERIFY-LOOP COMPLETELY** — Run `/verify-implementation [PLAN_PATH] --force` in a loop until:
   - ✅ **PASS**: 2 consecutive runs with zero Critical/High/Medium gaps, OR
