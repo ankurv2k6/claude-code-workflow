@@ -1,42 +1,10 @@
 {
   "permissions": {
-    "allow": [
-      "Read", "Edit", "MultiEdit", "Write", "Glob", "Grep", "NotebookEdit",
-      "TodoWrite", "Task", "Agent", "Skill", "ToolSearch",
-      "Bash(pnpm:*)", "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(tsx:*)", "Bash(tsc:*)",
-      "Bash(vitest:*)", "Bash(playwright:*)", "Bash(xvfb-run:*)", "Bash(prettier:*)", "Bash(eslint:*)",
-      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)",
-      "Bash(git commit:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git restore:*)", "Bash(git stash:*)",
-      "Bash(git branch:*)", "Bash(git rev-parse:*)", "Bash(git rev-list:*)", "Bash(git merge-base:*)", "Bash(git ls-files:*)",
-      "Bash(git grep:*)", "Bash(git rm:*)", "Bash(git mv:*)", "Bash(git blame:*)", "Bash(git reset:*)", "Bash(git cherry-pick:*)",
-      "Bash(git merge:*)", "Bash(git rebase:*)", "Bash(git tag:*)", "Bash(git worktree list:*)",
-      "Bash(psql:*)", "Bash(pg_isready:*)", "Bash(createdb:*)", "Bash(dropdb:*)",
-      "Bash(docker ps:*)", "Bash(docker logs:*)", "Bash(docker exec:*)", "Bash(docker inspect:*)", "Bash(docker start:*)",
-      "Bash(docker compose ps:*)", "Bash(docker compose logs:*)",
-      "Bash(bash scripts/:*)", "Bash(scripts/:*)", "Bash(./scripts/:*)", "Bash(sh scripts/:*)", "Bash(bash .fleet/:*)",
-      "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)",
-      "Bash(sed:*)", "Bash(awk:*)", "Bash(sort:*)", "Bash(uniq:*)", "Bash(cut:*)", "Bash(tr:*)", "Bash(jq:*)", "Bash(diff:*)",
-      "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(touch:*)", "Bash(rm:*)", "Bash(chmod:*)", "Bash(ln:*)",
-      "Bash(echo:*)", "Bash(printf:*)", "Bash(pwd)", "Bash(cd:*)", "Bash(date:*)", "Bash(sleep:*)", "Bash(test:*)",
-      "Bash([:*)", "Bash(true)", "Bash(false)", "Bash(unset:*)", "Bash(which:*)", "Bash(command -v:*)", "Bash(basename:*)", "Bash(dirname:*)",
-      "Bash(realpath:*)", "Bash(xargs:*)", "Bash(tee:*)", "Bash(timeout:*)", "Bash(time:*)", "Bash(nproc)", "Bash(free:*)",
-      "Bash(df:*)", "Bash(du:*)", "Bash(ps:*)", "Bash(pgrep:*)", "Bash(lsof:*)", "Bash(ss:*)", "Bash(uptime)",
-      "Bash(curl -s http://127.0.0.1:*)", "Bash(curl -s http://localhost:*)", "Bash(curl -fsS http://127.0.0.1:*)",
-      "Bash(curl -fsS http://localhost:*)", "Bash(shellcheck:*)", "Bash(gitleaks:*)", "Bash(python3:*)",
-      "Bash(tar:*)", "Bash(gzip:*)", "Bash(unzip:*)", "Bash(sha256sum:*)", "Bash(md5sum:*)", "Bash(stat:*)", "Bash(file:*)"
-    ],
     "deny": [
-      "Bash(git push:*)", "Bash(git remote:*)", "Bash(git fetch:*)", "Bash(git pull:*)", "Bash(git clone:*)",
-      "Bash(git config:*)", "Bash(git worktree add:*)", "Bash(git worktree remove:*)",
-      "Bash(gh:*)", "Bash(aws:*)", "Bash(terraform:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(rsync:*)", "Bash(sudo:*)",
-      "Bash(su:*)", "Bash(pkill:*)", "Bash(killall:*)", "Bash(env)", "Bash(printenv:*)", "Bash(set)",
-      "Bash(docker run:*)", "Bash(docker rm:*)", "Bash(docker rmi:*)", "Bash(docker system:*)", "Bash(docker volume:*)",
-      "Bash(docker network:*)", "Bash(docker compose down:*)", "Bash(docker compose rm:*)",
-      "Bash(rm -rf /:*)", "Bash(rm -rf ~:*)", "Bash(rm -rf $HOME:*)",
+      "Bash(git push:*)", "Bash(git remote:*)", "Bash(gh:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(sudo:*)", "Bash(su:*)",
+      "Bash(pkill:*)", "Bash(killall:*)", "Bash(aws:*)", "Bash(terraform:*)", "Bash(env)", "Bash(printenv:*)",
       "Read(~/.config/fleet/**)", "Read(~/.ssh/**)", "Read(~/.claude.json)", "Read(~/.claude/.credentials.json)",
-      "Edit(~/.config/fleet/**)", "Edit(~/.ssh/**)", "Edit(~/.claude/**)", "Write(~/.config/fleet/**)", "Write(~/.ssh/**)",
-      "Bash(cat ~/.config/fleet:*)", "Bash(cat $HOME/.config/fleet:*)", "Bash(cat /home/*/.config/fleet:*)",
-      "WebFetch"
+      "Edit(~/.config/fleet/**)", "Edit(~/.ssh/**)", "Edit(~/.claude/settings.json)", "Edit(~/.profile)", "Edit(~/.bashrc)"
     ]
   },
   "env": {

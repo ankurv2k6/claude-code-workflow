@@ -5,58 +5,84 @@ description: Send parallel research and review work to the home-LAN worker lapto
 
 # fleet: send work to the worker laptops
 
-The iMac orchestrates; the workers run unattended Claude Code **lanes**, each in its own git worktree. Workers hold no
-GitHub or AWS credentials: the iMac pushes code to them over SSH and fetches the lane branches back. `fleet --help` lists
-every command.
+The iMac orchestrates; the workers run unattended Claude Code **lanes**, each in its own git worktree, in auto mode
+(the same permission mode as an iMac session). Workers hold no GitHub or AWS credentials: the iMac pushes code to them
+over SSH and fetches the lane branches back. `fleet --help` lists every command.
 
 ## Decide what goes where
 
-- **Lanes on a worker:** tracks that only read code, docs, git history or the web and write a report.
+- **Lanes on a worker:** tracks that read code, docs, git history or the web and write a report.
 - **Your own subagents on the iMac:** anything that needs the running app, a database or containers (they stay on the
-  iMac for now), anything interactive, anything that needs GitHub or AWS.
-- **Any git repo works with no setup.** `fleet lane .` registers the repo on first use; a `.fleet/` recipe is optional
-  (without one a lane gets its worktree and nothing more). Outside a git repo, give the repo's path instead of `.`.
+  iMac for now), MCP servers or connectors, anything interactive, anything that needs GitHub or AWS.
+- **Any git repo works with no setup.** `fleet lane .` registers the repo on first use; a `.fleet/` recipe is optional.
+  Outside a git repo, give the repo's path instead of `.`.
+
+## What a lane gets
+
+- **The checkout as it is now:** HEAD, a snapshot commit of uncommitted and untracked files, and the gitignored files,
+  except `node_modules` and `.venv` (macOS builds). Commit nothing first; fleet prints what it sent.
+- Your user skills, the workflow commands, the repo's own agents and a read-only copy of the project's memory.
+- **Not:** MCP servers, plugins, or anything running on the iMac. The worker is Linux: macOS-only tools (`sips`) and
+  paths (`/Users/…`) don't exist there; the lane is told to read `/Users/…/<repo>` paths as its worktree.
+- Only your brief, not this conversation: put everything the lane needs to know into it.
+
+## Choose the model and effort per lane
+
+Pass `--model` for every lane, by the tiers in `~/.claude/_repo/AGENT-INDEX.md` (section 3):
+
+| `--model` | Use for |
+|---|---|
+| `opus` | complex reasoning, architecture, security, synthesis, review and verification, code research that needs judgement |
+| `sonnet` | general development, wide web reading and summarising, inventories, moderate complexity |
+| `haiku` | simple lookups and extraction with a known target |
+
+`--agent <name>` runs the lane as one of the repo's agents (`.claude/agents/<name>.md`) and uses that agent's model
+unless `--model` is given. Effort: `--effort` by role (`~/.claude/commands/_shared-effort-budget.md`), and a project or
+user rule wins (for example, "every background agent runs at high"); the default is `high`. Opus uses the shared plan's
+limits fastest, so do not give a lane Opus out of habit.
 
 ## Limits
 
 - **At most 6 agents at once** in total: your local subagents plus every lane (owner rule).
 - **fleet does the placing.** Each worker caps its lanes (`slots`, `research_slots`, optional `mem_gb` in
   `~/.fleet/workers`); a lane reserves memory (research lanes 1 GB). Without `--host`, a lane goes to the worker with
-  the most free room, and `fleet lane` refuses, naming the reason, when no worker has room. Other windows' lanes count
-  too, so a refusal is normal: wait for one of your lanes to end, or do the track yourself. Never retry in a loop.
-- `fleet status` shows each worker's lanes against its caps, its reserved and available memory and its load.
-- Every lane uses the Claude account the iMac is signed in to, and shares its limits. Use `--model sonnet` for wide web
-  reading; keep the default model for code research, verification and synthesis.
+  the most free room. `fleet lane` refuses, naming the reason, when no worker has room or a laptop is on battery.
+  Other windows' lanes count too, so a refusal is normal: wait for one of your lanes to end, or do the track yourself.
+  Never retry in a loop.
+- Every lane uses the Claude account the iMac is signed in to, and shares its limits.
 - Lanes never push. You push only when the user asks (`fleet fetch --push`).
 
 ## Steps
 
-1. **Check:** `fleet status` (the worker is reachable and has free slots) and `fleet claude status` (same account).
+1. **Check:** `fleet status` (a worker is reachable, on mains power and has free slots) and `fleet claude status`.
 2. **Brief each track** in the iMac checkout at `context/lanes/<batch>/<lane>-brief.md`. It need not be committed;
    `fleet lane` copies it. A brief holds:
    - **Question:** one question, answerable on its own.
    - **Reading pack:** exact paths, globs and URLs, never "read the docs". Lanes have no one to ask.
-   - **Output:** `context/research/<batch>/<lane>.md`, the only place a research lane can write. Each finding with its
-     evidence (`file:line` or URL) and confidence; "not found" stated plainly.
+   - **Output:** `context/research/<batch>/<lane>.md` (research lanes write only there). Each finding with its evidence
+     (`file:line` or URL) and confidence; "not found" stated plainly, after checking ignored files too, not only
+     `git ls-files`.
    - **Done when**, and what is out of scope.
    - **Last step:** `git add context/research/<batch> && git commit -m "research(<batch>): <lane>"`.
 3. **Dispatch** each lane (names: lowercase and dashes, unique per project, prefixed by the batch, e.g. `ar-a`):
    ```bash
-   fleet lane . <lane> --brief context/lanes/<batch>/<lane>-brief.md --profile research [--model sonnet]
+   fleet lane . <lane> --brief context/lanes/<batch>/<lane>-brief.md --profile research --model <opus|sonnet|haiku>
    ```
-   Run it from the repo. The lane starts from the committed `HEAD`: uncommitted changes are not sent (fleet says so).
-   Pass `--base <branch>` if the task names one, `--host <worker>` only to pin a lane. It prints the lane's full name,
-   `<project>/<lane>`; inside the repo you may write it `./<lane>`.
-4. **Wait without polling:** run `fleet wait ./<lane>` in the background, one per lane, so you are notified as
-   each ends. Meanwhile, do the iMac-only tracks yourself.
+   Run it from the repo. Pass `--base <branch>` if the task names one (the lane then gets that commit plus the ignored
+   files, not your uncommitted work), `--host <worker>` only to pin a lane. It prints the lane's full name,
+   `<project>/<lane>`; inside the repo you may write it `./<lane>`. A repo's first dispatch to a worker copies all its
+   ignored files and can take minutes; later ones send only changes.
+4. **Wait without polling:** run `fleet wait ./<lane>` in the background, one per lane, so you are notified as each
+   ends. Meanwhile, do the iMac-only tracks yourself.
 5. **Collect** each finished lane:
-   - Read the `fleet wait` summary: the result, the **refused tool calls**, the commits.
-   - `fleet fetch ./<lane>`, then read the report with
-     `git show lane/<lane>:context/research/<batch>/<lane>.md`.
-   - If refused calls blocked the lane, say which, then rerun with a narrower brief or ask the user to widen the
-     allow-list. Never work around a refusal.
-6. **Clean up** once you have saved what you need: `fleet remove ./<lane> --delete-branch`. Logs stay in
-   `~/.fleet/lanes-archive`.
+   - Read the `fleet wait` summary: the model, the result, the **refused tool calls**, the commits.
+   - `fleet fetch ./<lane>` puts the lane's commits on your HEAD at dispatch (without the snapshot), then read the report
+     with `git show lane/<lane>:context/research/<batch>/<lane>.md`. If fetch says a commit does not apply, read it from
+     `refs/fleet/raw/<lane>` instead and tell the user.
+   - Refused calls in auto mode are the classifier or a hard rule (push, credentials) saying no: report them; never
+     work around one.
+6. **Clean up** once you have saved what you need: `fleet remove ./<lane> --delete-branch` (the worker's and the iMac's
+   copies). Logs stay in `~/.fleet/lanes-archive`.
 
 Watch a lane live with `fleet logs ./<lane> --follow`. Stop one with `fleet remove ./<lane> --force`.
 
@@ -65,15 +91,7 @@ Watch a lane live with `fleet logs ./<lane> --follow`. Stop one with `fleet remo
 | Symptom | Do |
 |---|---|
 | `fleet lane` says the worker is not on the iMac's account | `fleet claude status`; tell the user if a token is missing (`fleet claude add`) |
-| A lane ends with refused tool calls | Report them; rerun with a brief that avoids them, or ask the user to widen the allow-list |
+| A lane ends with refused tool calls | Report them; rerun with a brief that avoids them |
 | A lane ends with an error result about usage limits | Tell the user; rerun after the limit resets |
-| `fleet status` shows a lane as `gone` (the worker rebooted) | Dispatch it again; its branch keeps whatever it had committed |
-| `no worker can take a … lane now` | Wait for one of your lanes to end, or run the track locally; say which |
-
-## What a lane can do
-
-- **research** profile: read anything in its worktree; read-only git; web search and web pages; write only under
-  `context/research/`; commit. No edits elsewhere, no `pnpm`, `node` or `docker`, no push.
-- **build** profile: wider (edits, `pnpm`, tests without a database). Use it only when the task needs it.
-- A lane's port block and settings are written into its prompt. Unattended sessions refuse shell commands that expand
-  most environment variables, so a lane writes those values out literally.
+| `fleet status` shows a lane as `gone` (the worker restarted) | Dispatch it again; its branch keeps whatever it had committed |
+| `no worker can take a … lane now` | Wait for one of your lanes to end, or run the track locally; say which. "On battery": ask the user to plug the laptop in |

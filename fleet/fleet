@@ -444,21 +444,24 @@ const USAGE = `usage:
   fleet add <ip> --name worker-NN [--slots 2] [--role lanes] [--account <login>]
                                     turn a freshly installed Ubuntu laptop into a worker
   fleet lane <project|.> <lane> --brief <path> [--profile research|build] [--host <worker>]
-             [--base <branch|commit>] [--branch <b>] [--model <m>] [--effort high]
-                                    start an unattended Claude Code lane on a worker. "." is the git repo you are
-                                    in (registered on first use; a .fleet/ recipe is optional). --base defaults to
-                                    HEAD; without --host the lane goes to the least-loaded worker with room.
-                                    research lanes are light (research_slots, 1 GB), read code and the web, and
-                                    write only context/research/
+             [--model opus|sonnet|haiku] [--effort high] [--agent <name>] [--base <branch|commit>] [--branch <b>]
+                                    start an unattended Claude Code lane (auto mode) on a worker. "." is the git repo
+                                    you are in (registered on first use; a .fleet/ recipe is optional). The lane gets
+                                    the checkout as it is: HEAD, a snapshot of uncommitted work, and gitignored files
+                                    (not node_modules). Pick --model per task (AGENT-INDEX.md section 3); default
+                                    opus, effort high. Without --host the lane goes to the least-loaded worker with
+                                    room. research lanes are light (research_slots, 1 GB) and write context/research/
                                     Caps per worker, in ~/.fleet/workers: slots, research_slots, mem_gb
   fleet wait <project>/<lane> [--timeout <min>]
                                     return when the lane ends, with its result and refused tool calls
   fleet logs <project>/<lane> [--follow] [--setup] [--raw]
                                     the lane's session (or its recipe setup log)
   fleet fetch <project>/<lane> [--push]
-                                    bring the lane branch to the iMac's repo (and push it to origin)
+                                    bring the lane branch to the iMac's repo, on top of your HEAD at dispatch (and
+                                    push it to origin)
   fleet remove <project>/<lane> [--force] [--delete-branch]
-                                    stop and clean up the lane; its logs are kept in ~/.fleet/lanes-archive
+                                    stop and clean up the lane (--delete-branch: on the worker and the iMac); its
+                                    logs are kept in ~/.fleet/lanes-archive
 
   fleet claude add [--have-token | --from <worker>]
                                     store a long-lived token for the account the iMac is signed in to
@@ -470,6 +473,10 @@ const USAGE = `usage:
   (data, a queue for lanes that find no room, and macOS workers come later)`;
 
 async function main(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    say(USAGE);
+    return 0;
+  }
   const [group, cmd, ...rest] = argv;
   const ctx = { claudeSync: sync };
   switch (group) {

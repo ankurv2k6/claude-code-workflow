@@ -177,7 +177,111 @@ function laneEnv(L) {
     FLEET_WORKTREE: `$HOME/${R.wt}`,
     FLEET_EFFORT: L.effort,
     FLEET_MODEL: L.model || '',
+    FLEET_AGENT: L.agent || '',
+    LC_COLLATE: 'C', // sort as the Mac does (its LANG is unset); Ubuntu's C.UTF-8 orders differently
+    ...(L.passEnv || {}),
   };
+}
+
+// Session settings from the iMac's shell that a lane should share. Never secrets.
+const PASS_ENV = ['CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'MAX_THINKING_TOKENS'];
+
+// ---------- the lane's files: the checkout as it is, not just its last commit ----------
+
+const gitIn = (dir, args, { env, input } = {}) =>
+  spawnSync('git', ['-C', dir, ...args], { env: env || process.env, input, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+
+// A snapshot commit on top of HEAD that holds the checkout's uncommitted and untracked (not ignored) files. It is
+// built in a copy of the index, so the owner's own index and working tree are untouched. fetch replays the lane's
+// commits onto HEAD, so the snapshot never reaches a branch the owner merges. Returns null when nothing is uncommitted.
+function snapshot(checkout, head) {
+  const idx = path.join(os.tmpdir(), `fleet-index-${process.pid}`);
+  const real = gitIn(checkout, ['rev-parse', '--path-format=absolute', '--git-path', 'index']).stdout.trim();
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  const g = (args, input) => {
+    const r = gitIn(checkout, args, { env, input });
+    if (r.status !== 0) throw new Error(`git ${args[0]}: ${(r.stderr || '').trim().split('\n').pop()}`);
+    return r.stdout.trim();
+  };
+  try {
+    if (fs.existsSync(real)) fs.copyFileSync(real, idx); // keeps git's stat cache, so only changed files are hashed
+    else g(['read-tree', head]);
+    g(['add', '-A']);
+    const tree = g(['write-tree']);
+    if (tree === g(['rev-parse', `${head}^{tree}`])) return null;
+    const count = g(['diff', '--cached', '--name-only', head]).split('\n').filter(Boolean).length;
+    const sha = g(['commit-tree', '--no-gpg-sign', tree, '-p', head, '-m', `fleet snapshot: uncommitted work in ${checkout} at dispatch`]);
+    return { sha, count };
+  } finally {
+    fs.rmSync(idx, { force: true });
+  }
+}
+
+// Gitignored files (data, scratch notes, build output) reach a lane through a mirror of the checkout on the worker,
+// kept current by rsync (only changes travel after the first copy) and hard-linked into each worktree. Left out:
+// .git, and node_modules and .venv (built for macOS; a lane installs them if it needs them). A project can leave out
+// more with sync_exclude = ["path/", …] in .fleet/project.toml.
+const SYNC_EXCLUDES = ['.git', 'node_modules', '.venv', '.DS_Store'];
+
+function syncFiles(host, P) {
+  const key = `${path.basename(P.checkout).replace(/[^A-Za-z0-9._-]/g, '-')}-${require('crypto').createHash('sha1').update(P.checkout).digest('hex').slice(0, 8)}`;
+  const mirror = `work/${P.name}/mirror/${key}`;
+  const excludes = [...SYNC_EXCLUDES, ...(Array.isArray(P.cfg.sync_exclude) ? P.cfg.sync_exclude : [])];
+  return withFileLock(
+    `mirror-${host}-${P.name}-${key}`,
+    () => {
+      remote(host, `mkdir -p ~/${mirror}`);
+      const t0 = Date.now();
+      const r = run('rsync', ['-a', '--delete', '--stats', ...excludes.flatMap((e) => ['--exclude', e]), `${P.checkout}/`, `${host}:${mirror}/`]);
+      const sent = Number((/Total transferred file size: ([\d,]+)/.exec(r.stdout) || [0, '0'])[1].replace(/,/g, ''));
+      return { mirror, excludes, secs: Math.round((Date.now() - t0) / 1000), sentMb: Math.round(sent / 1048576) };
+    },
+    6 * 3600 * 1000, // a first copy of a large checkout can take a while; a second window waits for it
+  );
+}
+
+// The iMac's project memory (keyed by the repo's path), copied for the lane. Claude keys a worker lane's memory by
+// its bare repo. A read-only copy in effect: --delete drops whatever a lane wrote there.
+function syncMemory(host, P, remoteHome) {
+  const local = path.join(HOME, '.claude', 'projects', P.repo.replace(/[^A-Za-z0-9]/g, '-'), 'memory');
+  if (!fs.existsSync(local)) return false;
+  const key = `${remoteHome}/${remotePaths(P.name, 'x').bare}`.replace(/[^A-Za-z0-9]/g, '-');
+  remote(host, `mkdir -p ~/.claude/projects/${key}/memory`);
+  run('rsync', ['-a', '--delete', `${local}/`, `${host}:.claude/projects/${key}/memory/`]);
+  return true;
+}
+
+// Replays a lane's commits (made on top of the snapshot) onto the owner's HEAD at dispatch, one by one, in a temporary
+// index, so the snapshot's own changes stay out of the lane branch. Returns { sha } or { conflict }.
+function replay(repo, from, to, onto) {
+  const commits = run('git', ['-C', repo, 'rev-list', '--reverse', '--topo-order', `${from}..${to}`]).stdout.split('\n').filter(Boolean);
+  const idx = path.join(os.tmpdir(), `fleet-replay-${process.pid}`);
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  try {
+    if (gitIn(repo, ['read-tree', onto], { env }).status !== 0) return { conflict: `cannot read ${onto}` };
+    let parent = onto;
+    for (const c of commits) {
+      const short = c.slice(0, 9);
+      if (run('git', ['-C', repo, 'rev-list', '--parents', '-n', '1', c]).stdout.trim().split(' ').length !== 2) {
+        return { conflict: `${short} is a merge commit` };
+      }
+      const diff = gitIn(repo, ['diff', '--binary', '--full-index', `${c}^`, c]).stdout;
+      if (diff) {
+        const a = gitIn(repo, ['apply', '--cached', '--binary'], { env, input: diff });
+        if (a.status !== 0) return { conflict: `${short} does not apply to HEAD: ${(a.stderr || '').trim().split('\n')[0]}` };
+      }
+      const tree = gitIn(repo, ['write-tree'], { env }).stdout.trim();
+      const [an, ae, ad, cn, ce, cd] = run('git', ['-C', repo, 'log', '-1', '--format=%an%n%ae%n%aD%n%cn%n%ce%n%cD', c]).stdout.split('\n');
+      const msg = run('git', ['-C', repo, 'log', '-1', '--format=%B', c]).stdout;
+      const ids = { GIT_AUTHOR_NAME: an, GIT_AUTHOR_EMAIL: ae, GIT_AUTHOR_DATE: ad, GIT_COMMITTER_NAME: cn, GIT_COMMITTER_EMAIL: ce, GIT_COMMITTER_DATE: cd };
+      const r = gitIn(repo, ['commit-tree', '--no-gpg-sign', tree, '-p', parent], { env: { ...process.env, ...ids }, input: msg });
+      if (r.status !== 0) throw new Error(`git commit-tree: ${(r.stderr || '').trim()}`);
+      parent = r.stdout.trim();
+    }
+    return { sha: parent };
+  } finally {
+    fs.rmSync(idx, { force: true });
+  }
 }
 
 // "export K=V" lines; $HOME stays unquoted so the worker expands it.
@@ -197,8 +301,11 @@ function syncWorkflow(host) {
     host,
     'mkdir -p ~/.claude && for d in commands _repo templates; do [ -e ~/claudeworkflow/.claude/$d ] && ln -sfn ~/claudeworkflow/.claude/$d ~/.claude/$d; done; true',
   );
-  for (const f of ['lane-settings.json', 'lane-settings.research.json']) {
-    run('scp', ['-q', path.join(FLEET_DIR, f), `${host}:.config/fleet/${f}`]);
+  run('scp', ['-q', path.join(FLEET_DIR, 'lane-settings.json'), `${host}:.config/fleet/lane-settings.json`]);
+  // The iMac's user skills (the claude.ai ones included), less fleet itself: a lane cannot dispatch lanes.
+  const skills = path.join(HOME, '.claude', 'skills');
+  if (fs.existsSync(skills)) {
+    run('rsync', ['-a', '--delete', '--exclude', 'fleet', '--exclude', '.trash', `${skills}/`, `${host}:.claude/skills/`]);
   }
 }
 
@@ -214,6 +321,8 @@ const PROBE_SH = [
   `printf "sessions=%s\\n" "$(tmux ls -F '#S' 2>/dev/null | tr '\\n' ' ')"`,
   `printf "containers=%s\\n" "$(docker ps --format '{{.Names}}' 2>/dev/null | tr '\\n' ' ')"`,
   `printf "ended=%s\\n" "$(cd ~/work 2>/dev/null && ls -d */lanes/*/exit 2>/dev/null | sed 's#/lanes/#/#; s#/exit$##' | tr '\\n' ' ')"`,
+  // Mains power: 1 if any supply is online; empty on a machine without power-supply info (a desktop).
+  `printf "power=%s %s\\n" "$(cat /sys/class/power_supply/*/online 2>/dev/null | sort -r | head -1)" "$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -1)"`,
 ].join('; ');
 
 function probe(W) {
@@ -238,6 +347,8 @@ function probe(W) {
     sessions: list(kv.sessions),
     containers: list(kv.containers),
     ended: new Set(list(kv.ended)),
+    onBattery: String(kv.power || '').split(' ')[0] === '0',
+    battery: String(kv.power || '').split(' ')[1] || '',
   };
 }
 
@@ -282,7 +393,9 @@ function place({ host, light, memGb }) {
     const n = light ? c.researchSlots : c.buildSlots;
     const used = (light ? c.research : c.build).map((L) => L.slot);
     const slot = [...Array(n).keys()].find((s) => !used.includes(s));
-    if (slot === undefined) why.push(`${W.name}: all ${n} ${kind} slots in use`);
+    // A laptop on battery powers off at 2% (worker-01 did, mid-lane, on 2026-11-21), so it takes no lanes.
+    if (pr.onBattery) why.push(`${W.name}: on battery (${pr.battery || '?'}%): plug it in`);
+    else if (slot === undefined) why.push(`${W.name}: all ${n} ${kind} slots in use`);
     else if (c.reservedGb + memGb > c.budgetGb) why.push(`${W.name}: lanes reserve ${c.reservedGb} of its ${c.budgetGb} GB; this one needs ${memGb}`);
     else if (pr.memAvailGb < memGb) why.push(`${W.name}: only ${pr.memAvailGb.toFixed(1)} GB available right now`);
     else {
@@ -314,12 +427,29 @@ function lane(argv, { claudeSync }) {
   if (!fs.existsSync(briefLocal)) fail(`no brief at ${briefLocal}`);
 
   // Profiles: "research" lanes only read and write reports, so they are light: they get their own slot pool
-  // (research_slots in ~/.fleet/workers), their own ports, 1 GB of memory and the read-only research settings. Every
-  // other profile is a full lane, counted against slots and the project's memory_gb.
+  // (research_slots in ~/.fleet/workers), their own ports and 1 GB of memory. Every other profile is a full lane,
+  // counted against slots and the project's memory_gb. Both run in auto mode with the same settings.
   const profile = o.profile || 'build';
   if (!/^[a-z][a-z0-9-]*$/.test(profile)) fail('a profile name is lowercase letters, digits and dashes');
   const light = profile === 'research';
   const memGb = light ? RESEARCH_MEM_GB : Number(P.cfg.memory_gb || 4);
+
+  // Model and effort: the dispatching session picks them per task, from the model tiers in
+  // ~/.claude/_repo/AGENT-INDEX.md (section 3) and the roles in _shared-effort-budget.md. An --agent lane runs as that
+  // agent and takes the agent's own model unless --model is given. Without either, Opus at high effort.
+  const agent = o.agent || null;
+  if (agent && !/^[A-Za-z0-9_-]+$/.test(agent)) fail('an agent name is letters, digits, dashes and underscores');
+  if (agent && ![path.join(P.checkout, '.claude', 'agents'), path.join(HOME, '.claude', 'agents')].some((d) => fs.existsSync(path.join(d, `${agent}.md`)))) {
+    fail(`no agent ${agent} in ${P.checkout}/.claude/agents or ~/.claude/agents`);
+  }
+  const model = o.model || (agent ? null : P.cfg.model || 'opus');
+  const effort = o.effort || P.cfg.effort || 'high';
+  const why = o.model ? 'chosen for this lane' : agent ? `the ${agent} agent's own model` : P.cfg.model ? 'from project.toml' : 'the default; pass --model to choose per task';
+  const passEnv = Object.fromEntries(PASS_ENV.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+
+  // The lane's starting point: HEAD plus a snapshot of uncommitted work, unless a base commit is named.
+  const head = sha;
+  const snap = base === 'HEAD' ? snapshot(P.checkout, head) : null;
 
   // Several windows may dispatch at once: choosing the worker and slot and recording the lane happen under one lock,
   // so two lanes never take the same slot or the same name.
@@ -331,16 +461,19 @@ function lane(argv, { claudeSync }) {
       lane: name,
       host: W.name,
       profile,
-      settings: light ? 'lane-settings.research.json' : 'lane-settings.json',
+      settings: 'lane-settings.json',
       slot,
       portBase: (light ? RESEARCH_PORT_START : PORT_START) + slot * PORT_BLOCK,
       memGb,
       base,
-      sha,
+      head, // the owner's commit at dispatch: fetch replays the lane's commits onto it
+      sha: snap ? snap.sha : head, // what the lane's worktree starts from
       branch,
       brief,
-      effort: o.effort || P.cfg.effort || 'high',
-      model: o.model || P.cfg.model || null, // project.toml may set model = "opus"; otherwise the plan's default
+      effort,
+      model,
+      agent,
+      passEnv,
       session: sessionName(proj, name),
       created: now(),
       state: 'setting up',
@@ -359,20 +492,29 @@ function lane(argv, { claudeSync }) {
   const R = remotePaths(proj, name);
 
   say(`fleet lane ${proj}/${name} → ${host} (${profile}, slot ${L.slot}, ${memGb} GB, ports ${L.portBase}–${L.portBase + PORT_BLOCK - 1})`);
-  const dirty = run('git', ['-C', P.checkout, 'status', '--porcelain', '--untracked-files=no'], { check: false }).stdout.trim();
-  if (dirty && base === 'HEAD') {
-    say(`  note: the lane gets commit ${sha.slice(0, 9)}; ${dirty.split('\n').length} uncommitted change(s) in ${P.checkout} are not sent`);
-  }
+  say(`  model: ${model || `${agent}'s`}${agent ? `, as agent ${agent}` : ''}, effort ${effort} (${why}); permission mode auto`);
+  say(
+    snap
+      ? `  files: ${head.slice(0, 9)} plus a snapshot of ${snap.count} uncommitted or untracked file(s), plus gitignored files`
+      : `  files: ${base === 'HEAD' ? `${head.slice(0, 9)} (nothing uncommitted)` : `${base} (${head.slice(0, 9)})`}, plus gitignored files`,
+  );
   say('· Claude account and version');
   if (claudeSync({ only: [host], ifChanged: true, quiet: true }) !== 0) fail(`${host} is not on the iMac's Claude account: fleet claude status`);
   say('· workflow commands and lane settings');
   withFileLock(`workflow-${host}`, () => syncWorkflow(host), 600000);
 
-  say(`· code: ${base} (${sha.slice(0, 9)}) → ${host}`);
+  say(`· code: ${L.sha.slice(0, 9)} → ${host}`);
   remote(host, `mkdir -p ~/${R.dir} ~/work/${proj}/wt && { [ -d ~/${R.bare} ] || git init -q --bare ~/${R.bare}; }`);
   const pushRef = `refs/fleet/base/${name}`; // a private ref, so pushing never moves a branch anyone works on
-  run('git', ['-C', P.checkout, 'push', '-q', '--force', `${host}:${R.bare}`, `${sha}:${pushRef}`]);
-  remote(host, `git --git-dir=$HOME/${R.bare} worktree add -q -b ${shq(branch)} $HOME/${R.wt} ${sha}`);
+  run('git', ['-C', P.checkout, 'push', '-q', '--force', `${host}:${R.bare}`, `${L.sha}:${pushRef}`]);
+  remote(host, `git --git-dir=$HOME/${R.bare} worktree add -q -b ${shq(branch)} $HOME/${R.wt} ${L.sha}`);
+
+  say('· gitignored files (only changes travel after the first copy)');
+  const files = syncFiles(host, P);
+  say(`  mirror updated: ${files.sentMb} MB sent in ${files.secs} s`);
+  remote(host, `rsync -a --ignore-existing --link-dest=$HOME/${files.mirror} $HOME/${files.mirror}/ $HOME/${R.wt}/`);
+  const remoteHome = remote(host, 'printf %s "$HOME"').trim();
+  if (syncMemory(host, P, remoteHome)) say('  project memory copied');
 
   say(`· brief and recipe (${P.ownRecipe ? "the repo's .fleet/" : 'the default: worktree only'})`);
   remote(host, `mkdir -p "$(dirname $HOME/${R.wt}/${brief})"`);
@@ -394,14 +536,12 @@ function lane(argv, { claudeSync }) {
     fail(`lane.sh up failed (exit ${up}). Read it with fleet logs ${proj}/${name} --setup; clean up with fleet remove ${proj}/${name}`);
   }
 
-  // The lane's values go into the prompt itself: an unattended session refuses shell commands that expand most
-  // environment variables ($FLEET_PORT_BASE, $TEST_DATABASE_URL …), so it must never need to read them that way.
-  // The recipe's env file therefore holds lane settings only, never secrets.
+  // The lane's values also go into the prompt, so the session knows them without looking. The recipe's env file holds
+  // lane settings only, never secrets.
   const recipeEnv = remote(host, `cat ~/${R.dir}/env 2>/dev/null || true`)
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(l));
-  const remoteHome = remote(host, 'printf %s "$HOME"').trim();
   const facts = [
     `FLEET_PROJECT=${proj}`,
     `FLEET_LANE=${name}`,
@@ -409,14 +549,26 @@ function lane(argv, { claudeSync }) {
     `FLEET_WORKTREE=${remoteHome}/${R.wt}`,
     ...recipeEnv,
   ];
-  const prompt =
-    `Read ${brief} and follow it. You are fleet lane ${proj}/${name} on ${host}, running unattended: nobody can answer ` +
-    `questions, so decide sensibly and record each decision in your report. Work on the current branch (${branch}) and ` +
-    'commit your work there; never push.\n\n' +
-    'Lane facts. These are already exported in your environment, so commands you run inherit them. When a command ' +
-    'needs one of these values, write the value itself, not $NAME: this unattended session refuses shell commands ' +
-    'that expand most environment variables.\n' +
-    facts.map((f) => `- ${f}`).join('\n');
+  const wt = `${remoteHome}/${R.wt}`;
+  const prompt = [
+    `Read ${brief} and follow it. You are fleet lane ${proj}/${name} on ${host}, a Linux worker, running unattended: ` +
+      'nobody can answer questions, so decide sensibly and record each decision in your report. ' +
+      `Work on the current branch (${branch}). Commit as you go, at least after each finished section, so a worker ` +
+      'restart loses little. Never push.',
+    `Your worktree is a copy of the owner's checkout on their Mac (${P.checkout}) at dispatch: ` +
+      (snap
+        ? `its last commit, a snapshot commit (${snap.sha.slice(0, 9)}) of its ${snap.count} uncommitted or untracked file(s), `
+        : base === 'HEAD' ? 'its last commit (nothing was uncommitted), ' : `commit ${base}, `) +
+      `and its gitignored files, except ${files.excludes.join(', ')} (node_modules and .venv hold macOS builds: install ` +
+      'them here if you need them). So a file missing here is missing on the Mac too, but `git ls-files` lists tracked ' +
+      'files only: before you report something as missing, look on disk too (ls, find). ' +
+      `Paths written for the Mac (${P.checkout}/…) mean this worktree (${wt}/…).`,
+    (light ? 'This is a research lane: write only under context/research/. ' : '') +
+      "Not available here: MCP servers and plugins (the Mac's connectors need its sign-ins), and anything that runs on " +
+      'the Mac itself (its databases, containers and apps). If the task needs one, say so in your report instead of ' +
+      'guessing. Project memory is a read-only copy: put findings in your report.',
+    'Lane facts (also exported in your environment):\n' + facts.map((f) => `- ${f}`).join('\n'),
+  ].join('\n\n');
   remote(host, `cat > ~/${R.dir}/prompt`, prompt);
 
   say('· session');
@@ -439,11 +591,10 @@ set -a
 set +a
 cd "$FLEET_WORKTREE" || exit 1
 date -Is >"$D/started"
-model=()
-[ -n "\${FLEET_MODEL:-}" ] && model=(--model "$FLEET_MODEL")
-claude -p "$(cat "$D/prompt")" \\
-  --permission-mode dontAsk --settings "$FLEET_SETTINGS" \\
-  --effort "$FLEET_EFFORT" "\${model[@]}" --output-format stream-json --verbose \\
+args=(--permission-mode auto --settings "$FLEET_SETTINGS" --effort "$FLEET_EFFORT")
+[ -n "\${FLEET_MODEL:-}" ] && args+=(--model "$FLEET_MODEL")
+[ -n "\${FLEET_AGENT:-}" ] && args+=(--agent "$FLEET_AGENT")
+claude -p "$(cat "$D/prompt")" "\${args[@]}" --output-format stream-json --verbose \\
   >"$D/session.jsonl" 2>"$D/session.err" </dev/null
 echo $? >"$D/exit"
 date -Is >"$D/ended"
@@ -463,6 +614,7 @@ function laneProgress(L) {
       `printf "commits=%s\\n" "$(git -C ~/${R.wt} rev-list --count ${L.sha}..HEAD 2>/dev/null)"`,
       `printf "dirty=%s\\n" "$(git -C ~/${R.wt} status --porcelain -- . ${shq(`:(exclude)${L.brief}`)} 2>/dev/null | wc -l)"`, // the copied brief is not the lane's work
       'printf "events=%s\\n" "$(wc -l < $d/session.jsonl 2>/dev/null)"',
+      `printf "init=%s\\n" "$(grep -m1 -F '"subtype":"init"' $d/session.jsonl 2>/dev/null | jq -c '{model, permissionMode}' 2>/dev/null)"`,
     ].join('; '),
   );
   const kv = Object.fromEntries(
@@ -472,18 +624,24 @@ function laneProgress(L) {
       .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
   );
   let result = null;
+  let init = null;
   try {
     result = kv.result ? JSON.parse(kv.result) : null;
   } catch {}
+  try {
+    init = kv.init ? JSON.parse(kv.init) : null;
+  } catch {}
   const state = kv.exit !== '' ? 'ended' : kv.tmux === 'yes' ? 'running' : 'gone';
-  return { state, exit: kv.exit, result, commits: Number(kv.commits) || 0, dirty: Number(kv.dirty) || 0, events: Number(kv.events) || 0 };
+  return { state, exit: kv.exit, result, init, commits: Number(kv.commits) || 0, dirty: Number(kv.dirty) || 0, events: Number(kv.events) || 0 };
 }
 
-const baseLabel = (L) => (L.base === 'HEAD' ? L.sha.slice(0, 9) : L.base);
+const baseLabel = (L) =>
+  L.head && L.head !== L.sha ? `${L.sha.slice(0, 9)} (a snapshot of uncommitted work on ${L.head.slice(0, 9)})` : L.base === 'HEAD' ? L.sha.slice(0, 9) : L.base;
 
 function summarize(L, pr) {
   const r = pr.result;
   say(`${L.project}/${L.lane} on ${L.host}: ${pr.state}${pr.exit !== '' ? ` (exit ${pr.exit})` : ''}`);
+  if (pr.init) say(`  model: ${pr.init.model}, permission mode ${pr.init.permissionMode}`);
   if (r) {
     const mins = r.duration_ms ? (r.duration_ms / 60000).toFixed(1) : '?';
     say(`  result: ${r.subtype}${r.is_error ? ' (error)' : ''}, ${r.num_turns} turns, ${mins} min`);
@@ -589,9 +747,25 @@ function fetch(argv) {
   const L = readLane(o._[0]);
   const P = project(L.project);
   const R = remotePaths(L.project, L.lane);
-  run('git', ['-C', P.repo, 'fetch', '-q', `${L.host}:${R.bare}`, `+refs/heads/${L.branch}:refs/heads/${L.branch}`]);
-  const log = run('git', ['-C', P.repo, 'log', '--oneline', `${L.sha}..${L.branch}`]).stdout.trim();
-  say(`${L.branch} fetched to ${P.repo}: ${log ? log.split('\n').length : 0} commit(s) on top of ${baseLabel(L)}`);
+  const raw = `refs/fleet/raw/${L.lane}`; // the lane's commits as made, on top of its starting point
+  const trees = run('git', ['-C', P.repo, 'worktree', 'list', '--porcelain']).stdout.split('\n');
+  if (trees.includes(`branch refs/heads/${L.branch}`)) fail(`${L.branch} is checked out on the iMac: switch away from it, then fetch again`);
+  run('git', ['-C', P.repo, 'fetch', '-q', `${L.host}:${R.bare}`, `+refs/heads/${L.branch}:${raw}`]);
+  const onto = L.head || L.sha;
+  let tip = run('git', ['-C', P.repo, 'rev-parse', raw]).stdout.trim();
+  if (L.head && L.head !== L.sha) {
+    // The lane started from a snapshot of uncommitted work: put its commits on the owner's HEAD without the snapshot.
+    const r = replay(P.repo, L.sha, raw, L.head);
+    if (r.conflict) {
+      say(`${L.branch} not updated: ${r.conflict}. The lane's commits are kept as ${raw}, on top of the snapshot of`);
+      say(`uncommitted work, so merging that ref would bring the snapshot too. Read files with: git show ${raw}:<path>`);
+      return 1;
+    }
+    tip = r.sha;
+  }
+  run('git', ['-C', P.repo, 'update-ref', `refs/heads/${L.branch}`, tip]);
+  const log = run('git', ['-C', P.repo, 'log', '--oneline', `${onto}..${L.branch}`]).stdout.trim();
+  say(`${L.branch} fetched to ${P.repo}: ${log ? log.split('\n').length : 0} commit(s) on top of ${onto.slice(0, 9)}${L.head && L.head !== L.sha ? ' (replayed off the snapshot)' : ''}`);
   if (log) say(log.split('\n').slice(0, 15).map((l) => `  ${l}`).join('\n'));
   if (o.push) {
     run('git', ['-C', P.repo, 'push', '-q', 'origin', L.branch]);
@@ -630,8 +804,18 @@ function remove(argv) {
     ];
     process.stdout.write(remote(L.host, steps.join('\n'), null, { timeout: 600000, check: false }));
   }
+  if (o['delete-branch']) {
+    // The iMac's copy too (from fleet fetch), unless it is checked out somewhere.
+    const P = projects()[L.project] ? project(L.project) : null;
+    if (P) {
+      const trees = run('git', ['-C', P.repo, 'worktree', 'list', '--porcelain'], { check: false }).stdout.split('\n');
+      if (trees.includes(`branch refs/heads/${L.branch}`)) say(`${L.branch} is checked out on the iMac, so it stays there`);
+      else run('git', ['-C', P.repo, 'branch', '-D', L.branch], { check: false });
+      run('git', ['-C', P.repo, 'update-ref', '-d', `refs/fleet/raw/${L.lane}`], { check: false });
+    }
+  }
   fs.rmSync(laneFile(L.project, L.lane), { force: true });
-  say(`removed ${L.project}/${L.lane}${o['delete-branch'] ? '' : ` (branch ${L.branch} kept on ${L.host})`}`);
+  say(`removed ${L.project}/${L.lane}${o['delete-branch'] ? ' and its branch, on the worker and the iMac' : ` (branch ${L.branch} kept on ${L.host} and the iMac)`}`);
   return 0;
 }
 
@@ -654,7 +838,8 @@ function status() {
     );
     say(
       `  now: ${pr.memAvailGb.toFixed(1)} of ${pr.memTotalGb.toFixed(1)} GB memory available, load ${pr.load} on ${pr.cores} cores, ` +
-        `swap ${pr.swap}, disk ${pr.disk} free; containers: ${pr.containers.join(' ') || 'none'}`,
+        `swap ${pr.swap}, disk ${pr.disk} free, ${pr.onBattery ? `ON BATTERY (${pr.battery}%): takes no lanes` : `mains power${pr.battery ? ` (battery ${pr.battery}%)` : ''}`}; ` +
+        `containers: ${pr.containers.join(' ') || 'none'}`,
     );
     for (const L of lanesByHost[W.name] || []) {
       let state = L.state;

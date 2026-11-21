@@ -95,7 +95,7 @@ dpkg --configure -a # finishes any install an earlier, interrupted run left half
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   ca-certificates curl git tmux jq build-essential python3 postgresql-client unzip zstd rsync \
-  zram-tools earlyoom avahi-daemon xvfb fonts-liberation fonts-noto-core fonts-noto-color-emoji
+  zram-tools earlyoom ripgrep fd-find tree python3-pip python3-venv socat imagemagick avahi-daemon xvfb fonts-liberation fonts-noto-core fonts-noto-color-emoji
 
 step "Docker Engine (published ports bind to 127.0.0.1)"
 install -m 0755 -d /etc/apt/keyrings
