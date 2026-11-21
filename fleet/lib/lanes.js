@@ -6,22 +6,29 @@
 // On a worker, per project:  ~/work/<project>/repo.git           bare repo the iMac pushes into
 //                            ~/work/<project>/wt/<lane>          the lane's worktree (branch <lane branch>)
 //                            ~/work/<project>/lanes/<lane>/      recipe copy, env, prompt, logs, exit code
-// On the iMac:               ~/.fleet/projects                   "<name> <repo path>" per line
+// On the iMac:               ~/.fleet/projects                   "<name> <repo path>" per line, written on first use
 //                            ~/.fleet/lanes/<project>__<lane>.json
 //                            ~/.fleet/lanes-archive/             logs of removed lanes
 //
-// Project recipe (in the project's repo, read from the iMac checkout at dispatch time):
-//   .fleet/project.toml   name, memory_gb, …
+// Any git repo works with no setup: "fleet lane . <lane>" registers the repo it runs in under its folder name. A
+// project recipe is optional (in the repo, read from the iMac checkout at dispatch time); without one, the default
+// recipe in recipes/default/ gives the lane its worktree and nothing more:
+//   .fleet/project.toml   memory_gb (a build lane's memory, default 4), effort, model
 //   .fleet/lane.sh        `lane.sh up` prepares the worktree (deps, databases, …) and may write KEY=VALUE lines to
 //                         "$FLEET_LANE_DIR/env" for the session; `lane.sh down` undoes it. Both run in the worktree
 //                         with FLEET_PROJECT, FLEET_LANE, FLEET_SLOT, FLEET_PORT_BASE (a block of 100), FLEET_MEM_GB,
 //                         FLEET_LANE_DIR and FLEET_WORKTREE set.
+//
+// Placement: each worker's line in ~/.fleet/workers caps its lanes (slots for build lanes, research_slots for research
+// lanes) and may set mem_gb, the memory lanes may reserve (default: the worker's memory less 2 GB). A lane reserves
+// memory_gb (research lanes: 1 GB). Without --host, a lane goes to the worker with the most unreserved memory that has
+// a free slot and enough memory available right now; with none, fleet lane refuses rather than overload one.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { HOME, STATE_DIR, FLEET_DIR, say, fail, shq, now, sleep, workers, remote, run, parseArgs } = require('./common');
+const { HOME, STATE_DIR, FLEET_DIR, say, fail, shq, now, sleep, workers, remote, run, parseArgs, withFileLock } = require('./common');
 
 const PROJECTS_FILE = path.join(STATE_DIR, 'projects');
 const LANES_DIR = path.join(STATE_DIR, 'lanes');
@@ -30,6 +37,9 @@ const PORT_START = 20000; // full lanes: 20000, 20100, …
 const RESEARCH_PORT_START = 25000; // research lanes: 25000, 25100, … (they rarely start anything)
 const PORT_BLOCK = 100;
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const RESEARCH_MEM_GB = 1; // a research lane is one claude process
+const OS_RESERVE_GB = 2; // left for the worker's own system when inventory sets no mem_gb
+const DEFAULT_RECIPE = path.join(FLEET_DIR, 'recipes', 'default');
 
 // ---------- projects and lanes ----------
 
@@ -73,13 +83,54 @@ function projects() {
   return out;
 }
 
-function project(name) {
-  const repo = projects()[name];
-  if (!repo) fail(`unknown project ${name}: add a line "${name} <repo path>" to ${PROJECTS_FILE}`);
-  const toml = path.join(repo, '.fleet', 'project.toml');
-  if (!fs.existsSync(toml)) fail(`${name} has no fleet recipe (${toml})`);
-  if (!fs.existsSync(path.join(repo, '.fleet', 'lane.sh'))) fail(`${name} has no .fleet/lane.sh`);
-  return { name, repo, cfg: parseToml(fs.readFileSync(toml, 'utf8')) };
+const realOr = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+
+function register(repo) {
+  return withFileLock('projects', () => {
+    const known = projects(); // read again under the lock: another window may have registered it a moment ago
+    const found = Object.keys(known).find((k) => realOr(known[k]) === realOr(repo));
+    if (found) return found;
+    const base = path.basename(repo).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 36) || 'repo';
+    let name = base;
+    for (let i = 2; known[name]; i++) name = `${base}-${i}`;
+    let text = '';
+    try {
+      text = fs.readFileSync(PROJECTS_FILE, 'utf8');
+    } catch {}
+    fs.writeFileSync(PROJECTS_FILE, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${name} ${repo}\n`);
+    say(`registered project ${name} → ${repo} (${PROJECTS_FILE})`);
+    return name;
+  });
+}
+
+// A project is named one of three ways: a name from ~/.fleet/projects, "." for the git repo the command runs in, or
+// a path to a repo. A repo used for the first time is registered under its folder name. A lane starts from the
+// checkout it was started in (a linked worktree included: its base, brief and recipe come from there), and its branch
+// comes back to the main repo, which every worktree of it shares.
+function project(arg) {
+  const known = projects();
+  let checkout = known[arg];
+  if (!checkout) {
+    if (arg !== '.' && !/[/~]/.test(arg)) fail(`unknown project ${arg}: run fleet inside its repo and name it ".", or give the repo's path`);
+    const dir = path.resolve(arg.replace(/^~(?=\/|$)/, HOME));
+    const top = run('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { check: false });
+    if (top.status !== 0) fail(`${dir} is not in a git repository`);
+    checkout = top.stdout.trim();
+  }
+  const common = path.resolve(checkout, run('git', ['-C', checkout, 'rev-parse', '--git-common-dir']).stdout.trim());
+  const repo = path.basename(common) === '.git' ? path.dirname(common) : common;
+  const name = known[arg] ? arg : register(repo);
+  const own = path.join(checkout, '.fleet');
+  const toml = path.join(own, 'project.toml');
+  const cfg = fs.existsSync(toml) ? parseToml(fs.readFileSync(toml, 'utf8')) : {};
+  const ownRecipe = fs.existsSync(path.join(own, 'lane.sh'));
+  return { name, repo, checkout, cfg, recipeDir: ownRecipe ? own : DEFAULT_RECIPE, ownRecipe };
 }
 
 const laneFile = (p, l) => path.join(LANES_DIR, `${p}__${l}.json`);
@@ -99,8 +150,9 @@ function allLanes() {
 }
 
 function readLane(id) {
-  const [p, l] = String(id || '').split('/');
-  if (!p || !l) fail('name the lane as <project>/<lane>');
+  let [p, l] = String(id || '').split('/');
+  if (!p || !l) fail('name the lane as <project>/<lane> (or ./<lane> inside the repo)');
+  if (p === '.') p = project('.').name;
   const f = laneFile(p, l);
   if (!fs.existsSync(f)) fail(`no lane ${p}/${l} (fleet status lists them)`);
   return JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -150,77 +202,182 @@ function syncWorkflow(host) {
   }
 }
 
+// ---------- placement: how many lanes a worker takes ----------
+
+// One SSH round trip: the worker's memory, CPU, disk and which lane sessions are alive or ended.
+const PROBE_SH = [
+  `printf "mem=%s\\n" "$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print t, a}' /proc/meminfo)"`,
+  'printf "cores=%s\\n" "$(nproc)"',
+  'printf "load=%s\\n" "$(cut -d" " -f1-3 /proc/loadavg)"',
+  `printf "swap=%s\\n" "$(free -m | awk '/^Swap:/{print $3"/"$2" MB"}')"`,
+  'printf "disk=%s\\n" "$(df -h --output=avail $HOME | tail -1 | tr -d " ")"',
+  `printf "sessions=%s\\n" "$(tmux ls -F '#S' 2>/dev/null | tr '\\n' ' ')"`,
+  `printf "containers=%s\\n" "$(docker ps --format '{{.Names}}' 2>/dev/null | tr '\\n' ' ')"`,
+  `printf "ended=%s\\n" "$(cd ~/work 2>/dev/null && ls -d */lanes/*/exit 2>/dev/null | sed 's#/lanes/#/#; s#/exit$##' | tr '\\n' ' ')"`,
+].join('; ');
+
+function probe(W) {
+  const out = remote(W.name, PROBE_SH, null, { timeout: 20000 });
+  const kv = Object.fromEntries(
+    out
+      .trim()
+      .split('\n')
+      .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
+  );
+  const [totalKb, availKb] = String(kv.mem || '').split(' ').map(Number);
+  if (!totalKb) throw new Error('could not read its memory (fleet places lanes on Linux workers only so far)');
+  const list = (s) => String(s || '').split(' ').filter(Boolean);
+  return {
+    memTotalGb: totalKb / 1048576,
+    memAvailGb: availKb / 1048576,
+    cores: Number(kv.cores) || 1,
+    load: kv.load,
+    load1: parseFloat(kv.load) || 0,
+    swap: kv.swap,
+    disk: kv.disk,
+    sessions: list(kv.sessions),
+    containers: list(kv.containers),
+    ended: new Set(list(kv.ended)),
+  };
+}
+
+// The lanes on a worker that hold a slot and their memory now. A research lane lets go when its session ends (it
+// starts nothing); a build lane holds on until fleet remove, since its recipe may still have containers up.
+function holding(L, pr) {
+  if (L.state === 'setting up' || L.profile !== 'research') return true;
+  return pr.sessions.includes(L.session) && !pr.ended.has(`${L.project}/${L.lane}`);
+}
+
+function capacity(W, pr, lanes) {
+  const held = lanes.filter((L) => L.host === W.name && holding(L, pr));
+  return {
+    research: held.filter((L) => L.profile === 'research'),
+    build: held.filter((L) => L.profile !== 'research'),
+    researchSlots: Number(W.research_slots || 4),
+    buildSlots: Number(W.slots || 1),
+    budgetGb: Number(W.mem_gb) || Math.max(0, Math.floor(pr.memTotalGb) - OS_RESERVE_GB),
+    reservedGb: held.reduce((s, L) => s + (Number(L.memGb) || 0), 0),
+  };
+}
+
+// Pick the worker for a new lane (or check the one named): a free slot of the lane's kind, room in the memory lanes
+// may reserve, and that much memory available right now. Among those, the most unreserved memory wins, then the
+// lowest load per core, so lanes spread out instead of piling onto one laptop. Call it under the dispatch lock.
+function place({ host, light, memGb }) {
+  const lanes = allLanes();
+  const candidates = host ? workers([host]) : workers().filter((W) => W.role === 'lanes');
+  if (!candidates.length) fail('no workers with role "lanes" in ~/.fleet/workers');
+  const kind = light ? 'research' : 'build';
+  const why = [];
+  let best = null;
+  for (const W of candidates) {
+    let pr;
+    try {
+      pr = probe(W);
+    } catch (e) {
+      why.push(`${W.name}: unreachable (${e.message})`);
+      continue;
+    }
+    const c = capacity(W, pr, lanes);
+    const n = light ? c.researchSlots : c.buildSlots;
+    const used = (light ? c.research : c.build).map((L) => L.slot);
+    const slot = [...Array(n).keys()].find((s) => !used.includes(s));
+    if (slot === undefined) why.push(`${W.name}: all ${n} ${kind} slots in use`);
+    else if (c.reservedGb + memGb > c.budgetGb) why.push(`${W.name}: lanes reserve ${c.reservedGb} of its ${c.budgetGb} GB; this one needs ${memGb}`);
+    else if (pr.memAvailGb < memGb) why.push(`${W.name}: only ${pr.memAvailGb.toFixed(1)} GB available right now`);
+    else {
+      const free = c.budgetGb - c.reservedGb;
+      const perCore = pr.load1 / pr.cores;
+      if (!best || free > best.free || (free === best.free && perCore < best.perCore)) best = { W, slot, free, perCore };
+    }
+  }
+  if (!best) {
+    fail(`no worker can take a ${kind} lane now:\n  ${why.join('\n  ')}\nWait for a lane to end (fleet status), or do the work on the iMac.`);
+  }
+  return best;
+}
+
 // ---------- fleet lane ----------
 
 function lane(argv, { claudeSync }) {
   const o = parseArgs(argv);
-  const [proj, name] = o._;
-  if (!proj || !name) fail('usage: fleet lane <project> <lane> --host <worker> --base <commit> --brief <path> [--branch <b>]');
+  const [projArg, name] = o._;
+  if (!projArg || !name) fail('usage: fleet lane <project|.> <lane> --brief <path> [--profile research|build] [--host <worker>] [--base <commit>]');
   if (!NAME_SHAPE.test(name)) fail('a lane name is lowercase letters, digits and dashes');
-  const P = project(proj);
-  const host = o.host || fail('--host <worker> is required (the scheduler that places lanes comes after the MVP)');
-  const [W] = workers([host]);
-  if (fs.existsSync(laneFile(proj, name))) fail(`${proj}/${name} already exists: fleet remove ${proj}/${name} first`);
-  const base = o.base || fail('--base <branch or commit> is required');
-  const sha = run('git', ['-C', P.repo, 'rev-parse', '--verify', `${base}^{commit}`]).stdout.trim();
+  const P = project(projArg);
+  const proj = P.name;
+  const base = o.base || 'HEAD';
+  const sha = run('git', ['-C', P.checkout, 'rev-parse', '--verify', `${base}^{commit}`]).stdout.trim();
   const branch = o.branch || `lane/${name}`;
   const brief = o.brief || fail('--brief <path to the lane brief, relative to the repo> is required');
-  const briefLocal = path.join(P.repo, brief);
+  const briefLocal = path.join(P.checkout, brief);
   if (!fs.existsSync(briefLocal)) fail(`no brief at ${briefLocal}`);
 
   // Profiles: "research" lanes only read and write reports, so they are light: they get their own slot pool
-  // (research_slots in ~/.fleet/workers), their own ports, and the read-only research settings. Every other profile
-  // is a full lane, counted against slots.
+  // (research_slots in ~/.fleet/workers), their own ports, 1 GB of memory and the read-only research settings. Every
+  // other profile is a full lane, counted against slots and the project's memory_gb.
   const profile = o.profile || 'build';
   if (!/^[a-z][a-z0-9-]*$/.test(profile)) fail('a profile name is lowercase letters, digits and dashes');
   const light = profile === 'research';
-  const slots = Number(light ? W.research_slots || 4 : W.slots || 1);
-  const used = allLanes()
-    .filter((x) => x.host === host && (x.profile === 'research') === light)
-    .map((x) => x.slot);
-  const slot = [...Array(slots).keys()].find((s) => !used.includes(s));
-  if (slot === undefined) {
-    fail(`${host} has no free ${light ? 'research ' : ''}slot (${slots} in ~/.fleet/workers): wait for a lane or remove one`);
-  }
+  const memGb = light ? RESEARCH_MEM_GB : Number(P.cfg.memory_gb || 4);
 
+  // Several windows may dispatch at once: choosing the worker and slot and recording the lane happen under one lock,
+  // so two lanes never take the same slot or the same name.
+  const L = withFileLock('dispatch', () => {
+    if (fs.existsSync(laneFile(proj, name))) fail(`${proj}/${name} already exists: fleet remove ${proj}/${name} first`);
+    const { W, slot } = place({ host: o.host, light, memGb });
+    const reserved = {
+      project: proj,
+      lane: name,
+      host: W.name,
+      profile,
+      settings: light ? 'lane-settings.research.json' : 'lane-settings.json',
+      slot,
+      portBase: (light ? RESEARCH_PORT_START : PORT_START) + slot * PORT_BLOCK,
+      memGb,
+      base,
+      sha,
+      branch,
+      brief,
+      effort: o.effort || P.cfg.effort || 'high',
+      model: o.model || P.cfg.model || null, // project.toml may set model = "opus"; otherwise the plan's default
+      session: sessionName(proj, name),
+      created: now(),
+      state: 'setting up',
+    };
+    writeLane(reserved);
+    return reserved;
+  });
+  const host = L.host;
+  // If anything below fails, the lane stays recorded (so fleet remove can clean up) but no longer holds its slot.
+  process.on('exit', () => {
+    if (L.state === 'setting up') {
+      L.state = 'setup failed';
+      writeLane(L);
+    }
+  });
   const R = remotePaths(proj, name);
-  const L = {
-    project: proj,
-    lane: name,
-    host,
-    profile,
-    settings: light ? 'lane-settings.research.json' : 'lane-settings.json',
-    slot,
-    portBase: (light ? RESEARCH_PORT_START : PORT_START) + slot * PORT_BLOCK,
-    memGb: Number(P.cfg.memory_gb || 4),
-    base,
-    sha,
-    branch,
-    brief,
-    effort: o.effort || P.cfg.effort || 'high',
-    model: o.model || P.cfg.model || null, // project.toml may set model = "opus"; otherwise the plan's default
-    session: sessionName(proj, name),
-    created: now(),
-    state: 'setting up',
-  };
 
-  say(`fleet lane ${proj}/${name} → ${host} (${profile}, slot ${slot}, ports ${L.portBase}–${L.portBase + PORT_BLOCK - 1})`);
+  say(`fleet lane ${proj}/${name} → ${host} (${profile}, slot ${L.slot}, ${memGb} GB, ports ${L.portBase}–${L.portBase + PORT_BLOCK - 1})`);
+  const dirty = run('git', ['-C', P.checkout, 'status', '--porcelain', '--untracked-files=no'], { check: false }).stdout.trim();
+  if (dirty && base === 'HEAD') {
+    say(`  note: the lane gets commit ${sha.slice(0, 9)}; ${dirty.split('\n').length} uncommitted change(s) in ${P.checkout} are not sent`);
+  }
   say('· Claude account and version');
   if (claudeSync({ only: [host], ifChanged: true, quiet: true }) !== 0) fail(`${host} is not on the iMac's Claude account: fleet claude status`);
   say('· workflow commands and lane settings');
-  syncWorkflow(host);
+  withFileLock(`workflow-${host}`, () => syncWorkflow(host), 600000);
 
   say(`· code: ${base} (${sha.slice(0, 9)}) → ${host}`);
   remote(host, `mkdir -p ~/${R.dir} ~/work/${proj}/wt && { [ -d ~/${R.bare} ] || git init -q --bare ~/${R.bare}; }`);
   const pushRef = `refs/fleet/base/${name}`; // a private ref, so pushing never moves a branch anyone works on
-  run('git', ['-C', P.repo, 'push', '-q', '--force', `${host}:${R.bare}`, `${sha}:${pushRef}`]);
+  run('git', ['-C', P.checkout, 'push', '-q', '--force', `${host}:${R.bare}`, `${sha}:${pushRef}`]);
   remote(host, `git --git-dir=$HOME/${R.bare} worktree add -q -b ${shq(branch)} $HOME/${R.wt} ${sha}`);
-  writeLane(L); // from here on, fleet remove can clean up
 
-  say('· brief and recipe');
+  say(`· brief and recipe (${P.ownRecipe ? "the repo's .fleet/" : 'the default: worktree only'})`);
   remote(host, `mkdir -p "$(dirname $HOME/${R.wt}/${brief})"`);
   run('scp', ['-q', briefLocal, `${host}:${R.wt}/${brief}`]);
-  run('rsync', ['-a', '--delete', `${path.join(P.repo, '.fleet')}/`, `${host}:${R.dir}/recipe/`]);
+  run('rsync', ['-a', '--delete', `${P.recipeDir}/`, `${host}:${R.dir}/recipe/`]);
   remote(host, `cat > ~/${R.dir}/fleet.env`, `${exportLines(laneEnv(L))}\n`);
   remote(host, `cat > ~/${R.dir}/run.sh && chmod +x ~/${R.dir}/run.sh`, RUN_SH);
 
@@ -304,7 +461,7 @@ function laneProgress(L) {
       `printf "tmux=%s\\n" "$(tmux has-session -t ${shq(L.session)} 2>/dev/null && echo yes || echo no)"`,
       'printf "result=%s\\n" "$(grep -F \'"type":"result"\' $d/session.jsonl 2>/dev/null | tail -1)"',
       `printf "commits=%s\\n" "$(git -C ~/${R.wt} rev-list --count ${L.sha}..HEAD 2>/dev/null)"`,
-      `printf "dirty=%s\\n" "$(git -C ~/${R.wt} status --porcelain 2>/dev/null | wc -l)"`,
+      `printf "dirty=%s\\n" "$(git -C ~/${R.wt} status --porcelain -- . ${shq(`:(exclude)${L.brief}`)} 2>/dev/null | wc -l)"`, // the copied brief is not the lane's work
       'printf "events=%s\\n" "$(wc -l < $d/session.jsonl 2>/dev/null)"',
     ].join('; '),
   );
@@ -322,6 +479,8 @@ function laneProgress(L) {
   return { state, exit: kv.exit, result, commits: Number(kv.commits) || 0, dirty: Number(kv.dirty) || 0, events: Number(kv.events) || 0 };
 }
 
+const baseLabel = (L) => (L.base === 'HEAD' ? L.sha.slice(0, 9) : L.base);
+
 function summarize(L, pr) {
   const r = pr.result;
   say(`${L.project}/${L.lane} on ${L.host}: ${pr.state}${pr.exit !== '' ? ` (exit ${pr.exit})` : ''}`);
@@ -333,7 +492,7 @@ function summarize(L, pr) {
     for (const d of denials.slice(0, 20)) say(`    - ${d.tool_name}: ${JSON.stringify(d.tool_input).slice(0, 140)}`);
     if (r.result) say(`  last message:\n${String(r.result).split('\n').slice(-12).map((l) => `    ${l}`).join('\n')}`);
   }
-  say(`  branch ${L.branch}: ${pr.commits} commit(s) on top of ${L.base}${pr.dirty ? `, ${pr.dirty} uncommitted change(s)` : ''}`);
+  say(`  branch ${L.branch}: ${pr.commits} commit(s) on top of ${baseLabel(L)}${pr.dirty ? `, ${pr.dirty} uncommitted change(s)` : ''}`);
   if (pr.state === 'ended') say(`  next: fleet fetch ${L.project}/${L.lane} (then --push), and fleet remove ${L.project}/${L.lane}`);
 }
 
@@ -432,7 +591,7 @@ function fetch(argv) {
   const R = remotePaths(L.project, L.lane);
   run('git', ['-C', P.repo, 'fetch', '-q', `${L.host}:${R.bare}`, `+refs/heads/${L.branch}:refs/heads/${L.branch}`]);
   const log = run('git', ['-C', P.repo, 'log', '--oneline', `${L.sha}..${L.branch}`]).stdout.trim();
-  say(`${L.branch} fetched to ${P.repo}: ${log ? log.split('\n').length : 0} commit(s) on top of ${L.base}`);
+  say(`${L.branch} fetched to ${P.repo}: ${log ? log.split('\n').length : 0} commit(s) on top of ${baseLabel(L)}`);
   if (log) say(log.split('\n').slice(0, 15).map((l) => `  ${l}`).join('\n'));
   if (o.push) {
     run('git', ['-C', P.repo, 'push', '-q', 'origin', L.branch]);
@@ -477,35 +636,26 @@ function remove(argv) {
 }
 
 function status() {
+  const all = allLanes();
   const lanesByHost = {};
-  for (const L of allLanes()) (lanesByHost[L.host] = lanesByHost[L.host] || []).push(L);
+  for (const L of all) (lanesByHost[L.host] = lanesByHost[L.host] || []).push(L);
   for (const W of workers()) {
-    let out;
+    let pr;
     try {
-      out = remote(
-        W.name,
-        [
-          'printf "load=%s\\n" "$(cut -d" " -f1-3 /proc/loadavg)"',
-          'free -m | awk \'/^Mem:/{print "mem="$3"/"$2" MB"} /^Swap:/{print "swap="$3"/"$2" MB"}\'',
-          'printf "disk=%s free\\n" "$(df -h --output=avail $HOME | tail -1 | tr -d " ")"',
-          'printf "sessions=%s\\n" "$(tmux ls -F "#S" 2>/dev/null | tr "\\n" " ")"',
-          'printf "containers=%s\\n" "$(docker ps --format "{{.Names}}" 2>/dev/null | tr "\\n" " ")"',
-        ].join('; '),
-        null,
-        { timeout: 20000 },
-      );
+      pr = probe(W);
     } catch (e) {
-      say(`${W.name} (${W.role}, ${W.slots || 1} slot(s)): unreachable (${e.message})`);
+      say(`${W.name} (${W.role}): unreachable (${e.message})`);
       continue;
     }
-    const kv = Object.fromEntries(
-      out
-        .trim()
-        .split('\n')
-        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
+    const c = capacity(W, pr, all);
+    say(
+      `${W.name} (${W.role}): research lanes ${c.research.length}/${c.researchSlots}, build lanes ${c.build.length}/${c.buildSlots}, ` +
+        `reserved ${c.reservedGb}/${c.budgetGb} GB`,
     );
-    say(`${W.name} (${W.role}, ${W.slots || 1} slot(s)): load ${kv.load}, memory ${kv.mem}, swap ${kv.swap}, disk ${kv.disk}`);
-    say(`  containers: ${kv.containers.trim() || 'none'}`);
+    say(
+      `  now: ${pr.memAvailGb.toFixed(1)} of ${pr.memTotalGb.toFixed(1)} GB memory available, load ${pr.load} on ${pr.cores} cores, ` +
+        `swap ${pr.swap}, disk ${pr.disk} free; containers: ${pr.containers.join(' ') || 'none'}`,
+    );
     for (const L of lanesByHost[W.name] || []) {
       let state = L.state;
       try {

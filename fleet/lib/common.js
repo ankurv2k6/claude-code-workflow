@@ -83,4 +83,40 @@ function parseArgs(argv, booleans = []) {
   return out;
 }
 
-module.exports = { HOME, STATE_DIR, FLEET_DIR, say, fail, shq, now, sleep, workers, remote, run, parseArgs };
+// A lock shared by every fleet process on this Mac, since several Claude windows may dispatch at once. It waits for a
+// live holder and takes over from a dead one (fail() exits without running finally, so a crashed holder leaves its
+// file behind).
+function withFileLock(name, fn, waitMs = 120000) {
+  const file = path.join(STATE_DIR, `${name}.lock`);
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      fs.writeFileSync(file, String(process.pid), { flag: 'wx' });
+      break;
+    } catch {
+      let pid = 0;
+      try {
+        pid = Number(fs.readFileSync(file, 'utf8'));
+      } catch {}
+      let alive = false;
+      try {
+        if (pid) process.kill(pid, 0); // signal 0 only tests that the process exists
+        alive = pid > 0;
+      } catch {}
+      if (!alive) {
+        fs.rmSync(file, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) fail(`waited ${waitMs / 1000} s for ${file} (held by pid ${pid})`);
+      sleep(250);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
+
+module.exports = { HOME, STATE_DIR, FLEET_DIR, say, fail, shq, now, sleep, workers, remote, run, parseArgs, withFileLock };

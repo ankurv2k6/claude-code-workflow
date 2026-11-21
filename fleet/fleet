@@ -440,13 +440,17 @@ function askHidden(question) {
 // ---------- dispatch ----------
 
 const USAGE = `usage:
-  fleet status                      workers, their load and memory, and every lane
+  fleet status                      workers: lanes per slot pool, reserved and available memory, load; every lane
   fleet add <ip> --name worker-NN [--slots 2] [--role lanes] [--account <login>]
                                     turn a freshly installed Ubuntu laptop into a worker
-  fleet lane <project> <lane> --host <worker> --base <branch|commit> --brief <path>
-             [--profile research|build] [--branch <b>] [--model <m>] [--effort high]
-                                    start an unattended Claude Code lane on a worker. research lanes are light
-                                    (research_slots), read code and the web, and write only context/research/
+  fleet lane <project|.> <lane> --brief <path> [--profile research|build] [--host <worker>]
+             [--base <branch|commit>] [--branch <b>] [--model <m>] [--effort high]
+                                    start an unattended Claude Code lane on a worker. "." is the git repo you are
+                                    in (registered on first use; a .fleet/ recipe is optional). --base defaults to
+                                    HEAD; without --host the lane goes to the least-loaded worker with room.
+                                    research lanes are light (research_slots, 1 GB), read code and the web, and
+                                    write only context/research/
+                                    Caps per worker, in ~/.fleet/workers: slots, research_slots, mem_gb
   fleet wait <project>/<lane> [--timeout <min>]
                                     return when the lane ends, with its result and refused tool calls
   fleet logs <project>/<lane> [--follow] [--setup] [--raw]
@@ -462,7 +466,8 @@ const USAGE = `usage:
   fleet claude status               the iMac's account and version, and each worker's
   fleet claude watch on|off         sync automatically when the iMac switches account or updates Claude Code
 
-  (data, tunnels and the scheduler come later in the MVP)`;
+  <project>/<lane> may be written ./<lane> inside the repo.
+  (data, a queue for lanes that find no room, and macOS workers come later)`;
 
 async function main(argv) {
   const [group, cmd, ...rest] = argv;

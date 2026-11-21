@@ -1,6 +1,6 @@
 ---
 name: fleet
-description: Send parallel research and review work to the home-LAN worker laptops instead of running it on the iMac. Use when a task splits into two or more independent tracks that read code, docs or the web and write a report (codebase research, competitor or web research, audits, reviews) for a project registered with fleet (~/.fleet/projects), or when the user mentions the fleet, workers or worker-01. Not for work that needs the iMac's databases, containers or running app.
+description: Send parallel research and review work to the home-LAN worker laptops instead of running it on the iMac. Use when a task splits into two or more independent tracks that read code, docs or the web and write a report (codebase research, competitor or web research, audits, reviews) in any git repo, or when the user mentions the fleet, workers or worker-01. Not for work that needs the iMac's databases, containers or running app.
 ---
 
 # fleet: send work to the worker laptops
@@ -14,12 +14,17 @@ every command.
 - **Lanes on a worker:** tracks that only read code, docs, git history or the web and write a report.
 - **Your own subagents on the iMac:** anything that needs the running app, a database or containers (they stay on the
   iMac for now), anything interactive, anything that needs GitHub or AWS.
-- **Not set up:** if the project is not in `~/.fleet/projects` with a `.fleet/` recipe, do the work locally and say so.
+- **Any git repo works with no setup.** `fleet lane .` registers the repo on first use; a `.fleet/` recipe is optional
+  (without one a lane gets its worktree and nothing more). Outside a git repo, give the repo's path instead of `.`.
 
 ## Limits
 
 - **At most 6 agents at once** in total: your local subagents plus every lane (owner rule).
-- `fleet status` shows each worker's load, memory and lanes. Research lanes use the worker's `research_slots`.
+- **fleet does the placing.** Each worker caps its lanes (`slots`, `research_slots`, optional `mem_gb` in
+  `~/.fleet/workers`); a lane reserves memory (research lanes 1 GB). Without `--host`, a lane goes to the worker with
+  the most free room, and `fleet lane` refuses, naming the reason, when no worker has room. Other windows' lanes count
+  too, so a refusal is normal: wait for one of your lanes to end, or do the track yourself. Never retry in a loop.
+- `fleet status` shows each worker's lanes against its caps, its reserved and available memory and its load.
 - Every lane uses the Claude account the iMac is signed in to, and shares its limits. Use `--model sonnet` for wide web
   reading; keep the default model for code research, verification and synthesis.
 - Lanes never push. You push only when the user asks (`fleet fetch --push`).
@@ -37,22 +42,23 @@ every command.
    - **Last step:** `git add context/research/<batch> && git commit -m "research(<batch>): <lane>"`.
 3. **Dispatch** each lane (names: lowercase and dashes, unique per project, prefixed by the batch, e.g. `ar-a`):
    ```bash
-   fleet lane <project> <lane> --host worker-01 --base "$(git rev-parse HEAD)" \
-     --brief context/lanes/<batch>/<lane>-brief.md --profile research [--model sonnet]
+   fleet lane . <lane> --brief context/lanes/<batch>/<lane>-brief.md --profile research [--model sonnet]
    ```
-   Use the branch the task names as `--base` instead, if it names one.
-4. **Wait without polling:** run `fleet wait <project>/<lane>` in the background, one per lane, so you are notified as
+   Run it from the repo. The lane starts from the committed `HEAD`: uncommitted changes are not sent (fleet says so).
+   Pass `--base <branch>` if the task names one, `--host <worker>` only to pin a lane. It prints the lane's full name,
+   `<project>/<lane>`; inside the repo you may write it `./<lane>`.
+4. **Wait without polling:** run `fleet wait ./<lane>` in the background, one per lane, so you are notified as
    each ends. Meanwhile, do the iMac-only tracks yourself.
 5. **Collect** each finished lane:
    - Read the `fleet wait` summary: the result, the **refused tool calls**, the commits.
-   - `fleet fetch <project>/<lane>`, then read the report with
+   - `fleet fetch ./<lane>`, then read the report with
      `git show lane/<lane>:context/research/<batch>/<lane>.md`.
    - If refused calls blocked the lane, say which, then rerun with a narrower brief or ask the user to widen the
      allow-list. Never work around a refusal.
-6. **Clean up** once you have saved what you need: `fleet remove <project>/<lane> --delete-branch`. Logs stay in
+6. **Clean up** once you have saved what you need: `fleet remove ./<lane> --delete-branch`. Logs stay in
    `~/.fleet/lanes-archive`.
 
-Watch a lane live with `fleet logs <project>/<lane> --follow`. Stop one with `fleet remove <project>/<lane> --force`.
+Watch a lane live with `fleet logs ./<lane> --follow`. Stop one with `fleet remove ./<lane> --force`.
 
 ## When something goes wrong
 
@@ -62,7 +68,7 @@ Watch a lane live with `fleet logs <project>/<lane> --follow`. Stop one with `fl
 | A lane ends with refused tool calls | Report them; rerun with a brief that avoids them, or ask the user to widen the allow-list |
 | A lane ends with an error result about usage limits | Tell the user; rerun after the limit resets |
 | `fleet status` shows a lane as `gone` (the worker rebooted) | Dispatch it again; its branch keeps whatever it had committed |
-| No free research slot | Wait for a lane to finish, or run the track locally |
+| `no worker can take a … lane now` | Wait for one of your lanes to end, or run the track locally; say which |
 
 ## What a lane can do
 
