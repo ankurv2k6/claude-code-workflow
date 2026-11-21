@@ -84,8 +84,8 @@ function parseArgs(argv, booleans = []) {
 }
 
 // A lock shared by every fleet process on this Mac, since several Claude windows may dispatch at once. It waits for a
-// live holder and takes over from a dead one (fail() exits without running finally, so a crashed holder leaves its
-// file behind).
+// live holder and takes over from a dead one. fail() exits without running finally blocks, so an exit handler lets go
+// of the lock too.
 function withFileLock(name, fn, waitMs = 120000) {
   const file = path.join(STATE_DIR, `${name}.lock`);
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -112,10 +112,13 @@ function withFileLock(name, fn, waitMs = 120000) {
       sleep(250);
     }
   }
+  const release = () => fs.rmSync(file, { force: true });
+  process.on('exit', release);
   try {
     return fn();
   } finally {
-    fs.rmSync(file, { force: true });
+    release();
+    process.removeListener('exit', release);
   }
 }
 
