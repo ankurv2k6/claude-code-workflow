@@ -445,12 +445,17 @@ const USAGE = `usage:
                                     turn a freshly installed Ubuntu laptop into a worker
   fleet lane <project|.> <lane> --brief <path> [--profile research|build] [--host <worker>]
              [--model opus|sonnet|haiku] [--effort high] [--agent <name>] [--base <branch|commit>] [--branch <b>]
+             [--copy-anyway]
                                     start an unattended Claude Code lane (auto mode) on a worker. "." is the git repo
                                     you are in (registered on first use; a .fleet/ recipe is optional). The lane gets
                                     the checkout as it is: HEAD, a snapshot of uncommitted work, and gitignored files
                                     (not node_modules). Pick --model per task (AGENT-INDEX.md section 3); default
                                     opus, effort high. Without --host the lane goes to the least-loaded worker with
                                     room. research lanes are light (research_slots, 1 GB) and write context/research/
+                                    Exit 4: the files would take over a minute to copy first, so run the track on
+                                    the iMac instead (or pass --copy-anyway)
+  fleet sync <project|.> [--host <worker>]
+                                    copy a repo's files to the workers ahead of time (only changes after the first)
                                     Caps per worker, in ~/.fleet/workers: slots, research_slots, mem_gb
   fleet wait <project>/<lane> [--timeout <min>]
                                     return when the lane ends, with its result and refused tool calls
@@ -492,6 +497,8 @@ async function main(argv) {
       return lanes.logs(argv.slice(1));
     case 'fetch':
       return lanes.fetch(argv.slice(1));
+    case 'sync':
+      return lanes.syncRepo(argv.slice(1));
     case 'remove':
       return lanes.remove(argv.slice(1));
     case 'claude':

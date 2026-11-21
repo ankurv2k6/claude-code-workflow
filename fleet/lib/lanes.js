@@ -223,21 +223,78 @@ function snapshot(checkout, head) {
 // more with sync_exclude = ["path/", …] in .fleet/project.toml.
 const SYNC_EXCLUDES = ['.git', 'node_modules', '.venv', '.DS_Store'];
 
-function syncFiles(host, P) {
+function mirrorOf(P) {
   const key = `${path.basename(P.checkout).replace(/[^A-Za-z0-9._-]/g, '-')}-${require('crypto').createHash('sha1').update(P.checkout).digest('hex').slice(0, 8)}`;
-  const mirror = `work/${P.name}/mirror/${key}`;
   const excludes = [...SYNC_EXCLUDES, ...(Array.isArray(P.cfg.sync_exclude) ? P.cfg.sync_exclude : [])];
+  return { key, id: `${P.name}/${key}`, mirror: `work/${P.name}/mirror/${key}`, excludes, rsyncExcludes: excludes.flatMap((e) => ['--exclude', e]) };
+}
+
+const statBytes = (out, label) => Number((new RegExp(`${label}: ([\\d,]+)`).exec(out) || [0, '0'])[1].replace(/,/g, ''));
+
+// Copy speed per worker, measured on real copies; a gigabit link until one is measured.
+const NET_FILE = path.join(STATE_DIR, 'net.json');
+const DEFAULT_MB_PER_S = 100;
+const COPY_BUDGET_S = 60; // a lane that would first have to copy for longer than this is handed back to the iMac
+const rates = () => {
+  try {
+    return JSON.parse(fs.readFileSync(NET_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+};
+const rateOf = (host) => Number(rates()[host]) || DEFAULT_MB_PER_S;
+
+// How much a lane's files would add to a worker's mirror: an rsync dry run, about a second even for 30,000 files.
+function estimateCopy(host, P) {
+  const M = mirrorOf(P);
+  remote(host, `mkdir -p ~/work/${P.name}/mirror`);
+  const r = run('rsync', ['-an', '--stats', ...M.rsyncExcludes, `${P.checkout}/`, `${host}:${M.mirror}/`]);
+  const mb = statBytes(r.stdout, 'Total transferred file size') / 1048576;
+  const rate = rateOf(host);
+  return { mb: Math.round(mb), secs: Math.round(mb / rate), rate };
+}
+
+function syncFiles(host, P) {
+  const M = mirrorOf(P);
   return withFileLock(
-    `mirror-${host}-${P.name}-${key}`,
+    `mirror-${host}-${M.id.replace('/', '-')}`,
     () => {
-      remote(host, `mkdir -p ~/${mirror}`);
+      remote(host, `mkdir -p ~/${M.mirror}`);
       const t0 = Date.now();
-      const r = run('rsync', ['-a', '--delete', '--stats', ...excludes.flatMap((e) => ['--exclude', e]), `${P.checkout}/`, `${host}:${mirror}/`]);
-      const sent = Number((/Total transferred file size: ([\d,]+)/.exec(r.stdout) || [0, '0'])[1].replace(/,/g, ''));
-      return { mirror, excludes, secs: Math.round((Date.now() - t0) / 1000), sentMb: Math.round(sent / 1048576) };
+      const r = run('rsync', ['-a', '--delete', '--stats', ...M.rsyncExcludes, `${P.checkout}/`, `${host}:${M.mirror}/`]);
+      const secs = (Date.now() - t0) / 1000;
+      const sentMb = Math.round(statBytes(r.stdout, 'Total transferred file size') / 1048576);
+      const totalMb = Math.round(statBytes(r.stdout, 'Total file size') / 1048576);
+      remote(host, `printf '%s %s\\n' "$(date +%s)" ${totalMb} > ~/${M.mirror}.synced`); // marks the mirror as warm
+      if (sentMb >= 100 && secs >= 2) {
+        const all = rates();
+        all[host] = Math.round(sentMb / secs);
+        fs.writeFileSync(NET_FILE, `${JSON.stringify(all, null, 2)}\n`);
+      }
+      return { mirror: M.mirror, excludes: M.excludes, secs: Math.round(secs), sentMb, totalMb };
     },
     6 * 3600 * 1000, // a first copy of a large checkout can take a while; a second window waits for it
   );
+}
+
+// fleet sync: copy a repo's files to workers ahead of time, so its lanes start without waiting for a first copy.
+function syncRepo(argv) {
+  const o = parseArgs(argv);
+  const P = project(o._[0] || '.');
+  const hosts = o.host ? workers([o.host]).map((W) => W.name) : workers().filter((W) => W.role === 'lanes').map((W) => W.name);
+  let failed = 0;
+  for (const h of hosts) {
+    try {
+      const est = estimateCopy(h, P);
+      say(`${h}: ${est.mb} MB to copy for ${P.name} (about ${est.secs} s at ${est.rate} MB/s)`);
+      const f = syncFiles(h, P);
+      say(`${h}: done, ${f.sentMb} MB sent in ${f.secs} s; ${f.totalMb} MB held for ${P.checkout}`);
+    } catch (e) {
+      failed++;
+      say(`${h}: not copied: ${e.message}`);
+    }
+  }
+  return failed ? 1 : 0;
 }
 
 // The iMac's project memory (keyed by the repo's path), copied for the lane. Claude keys a worker lane's memory by
@@ -321,6 +378,7 @@ const PROBE_SH = [
   `printf "sessions=%s\\n" "$(tmux ls -F '#S' 2>/dev/null | tr '\\n' ' ')"`,
   `printf "containers=%s\\n" "$(docker ps --format '{{.Names}}' 2>/dev/null | tr '\\n' ' ')"`,
   `printf "ended=%s\\n" "$(cd ~/work 2>/dev/null && ls -d */lanes/*/exit 2>/dev/null | sed 's#/lanes/#/#; s#/exit$##' | tr '\\n' ' ')"`,
+  `printf "mirrors=%s\\n" "$(cd ~/work 2>/dev/null && ls -d */mirror/*.synced 2>/dev/null | sed 's#/mirror/#/#; s#[.]synced$##' | tr '\\n' ' ')"`,
   // Mains power: 1 if any supply is online; empty on a machine without power-supply info (a desktop).
   `printf "power=%s %s\\n" "$(cat /sys/class/power_supply/*/online 2>/dev/null | sort -r | head -1)" "$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -1)"`,
 ].join('; ');
@@ -347,6 +405,7 @@ function probe(W) {
     sessions: list(kv.sessions),
     containers: list(kv.containers),
     ended: new Set(list(kv.ended)),
+    mirrors: new Set(list(kv.mirrors)),
     onBattery: String(kv.power || '').split(' ')[0] === '0',
     battery: String(kv.power || '').split(' ')[1] || '',
   };
@@ -372,9 +431,10 @@ function capacity(W, pr, lanes) {
 }
 
 // Pick the worker for a new lane (or check the one named): a free slot of the lane's kind, room in the memory lanes
-// may reserve, and that much memory available right now. Among those, the most unreserved memory wins, then the
-// lowest load per core, so lanes spread out instead of piling onto one laptop. Call it under the dispatch lock.
-function place({ host, light, memGb }) {
+// may reserve, and that much memory available right now. Among those, a worker that already holds the checkout's files
+// wins (no first copy), then the most unreserved memory, then the lowest load per core, so lanes spread out instead of
+// piling onto one laptop. Call it under the dispatch lock.
+function place({ host, light, memGb, mirrorId }) {
   const lanes = allLanes();
   const candidates = host ? workers([host]) : workers().filter((W) => W.role === 'lanes');
   if (!candidates.length) fail('no workers with role "lanes" in ~/.fleet/workers');
@@ -401,7 +461,10 @@ function place({ host, light, memGb }) {
     else {
       const free = c.budgetGb - c.reservedGb;
       const perCore = pr.load1 / pr.cores;
-      if (!best || free > best.free || (free === best.free && perCore < best.perCore)) best = { W, slot, free, perCore };
+      const warm = mirrorId && pr.mirrors.has(mirrorId) ? 1 : 0;
+      const better =
+        !best || warm > best.warm || (warm === best.warm && (free > best.free || (free === best.free && perCore < best.perCore)));
+      if (better) best = { W, slot, free, perCore, warm };
     }
   }
   if (!best) {
@@ -413,7 +476,7 @@ function place({ host, light, memGb }) {
 // ---------- fleet lane ----------
 
 function lane(argv, { claudeSync }) {
-  const o = parseArgs(argv);
+  const o = parseArgs(argv, ['copy-anyway']);
   const [projArg, name] = o._;
   if (!projArg || !name) fail('usage: fleet lane <project|.> <lane> --brief <path> [--profile research|build] [--host <worker>] [--base <commit>]');
   if (!NAME_SHAPE.test(name)) fail('a lane name is lowercase letters, digits and dashes');
@@ -455,7 +518,7 @@ function lane(argv, { claudeSync }) {
   // so two lanes never take the same slot or the same name.
   const L = withFileLock('dispatch', () => {
     if (fs.existsSync(laneFile(proj, name))) fail(`${proj}/${name} already exists: fleet remove ${proj}/${name} first`);
-    const { W, slot } = place({ host: o.host, light, memGb });
+    const { W, slot } = place({ host: o.host, light, memGb, mirrorId: mirrorOf(P).id });
     const reserved = {
       project: proj,
       lane: name,
@@ -491,6 +554,20 @@ function lane(argv, { claudeSync }) {
   });
   const R = remotePaths(proj, name);
 
+  // Work whose files would take long to copy runs on the iMac, where they already are: hand it back before anything
+  // is sent. fleet sync copies them ahead of time, so the next lanes can go to the worker.
+  if (!o['copy-anyway']) {
+    const est = estimateCopy(host, P);
+    if (est.secs > COPY_BUDGET_S) {
+      L.state = 'handed back';
+      fs.rmSync(laneFile(proj, name), { force: true });
+      say(`fleet: run ${proj}/${name} on the iMac: it would first copy ${est.mb} MB to ${host} (about ${Math.ceil(est.secs / 60)} min at ${est.rate} MB/s; the budget is ${COPY_BUDGET_S} s).`);
+      say(`  Do the track in your own session with the same brief. For later lanes, copy the files ahead in the background:`);
+      say(`  fleet sync . --host ${host}    (or pass --copy-anyway to send this lane and wait for the copy)`);
+      return 4;
+    }
+  }
+
   say(`fleet lane ${proj}/${name} → ${host} (${profile}, slot ${L.slot}, ${memGb} GB, ports ${L.portBase}–${L.portBase + PORT_BLOCK - 1})`);
   say(`  model: ${model || `${agent}'s`}${agent ? `, as agent ${agent}` : ''}, effort ${effort} (${why}); permission mode auto`);
   say(
@@ -511,7 +588,7 @@ function lane(argv, { claudeSync }) {
 
   say('· gitignored files (only changes travel after the first copy)');
   const files = syncFiles(host, P);
-  say(`  mirror updated: ${files.sentMb} MB sent in ${files.secs} s`);
+  say(`  mirror updated: ${files.sentMb} MB sent in ${files.secs} s (${files.totalMb} MB held)`);
   remote(host, `rsync -a --ignore-existing --link-dest=$HOME/${files.mirror} $HOME/${files.mirror}/ $HOME/${R.wt}/`);
   const remoteHome = remote(host, 'printf %s "$HOME"').trim();
   if (syncMemory(host, P, remoteHome)) say('  project memory copied');
@@ -955,4 +1032,4 @@ function addWorker(argv, { claudeSync }) {
   return synced;
 }
 
-module.exports = { lane, wait, logs, fetch, remove, status, addWorker };
+module.exports = { lane, wait, logs, fetch, remove, status, addWorker, syncRepo };

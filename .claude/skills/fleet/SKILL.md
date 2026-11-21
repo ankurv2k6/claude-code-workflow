@@ -70,8 +70,12 @@ limits fastest, so do not give a lane Opus out of habit.
    ```
    Run it from the repo. Pass `--base <branch>` if the task names one (the lane then gets that commit plus the ignored
    files, not your uncommitted work), `--host <worker>` only to pin a lane. It prints the lane's full name,
-   `<project>/<lane>`; inside the repo you may write it `./<lane>`. A repo's first dispatch to a worker copies all its
-   ignored files and can take minutes; later ones send only changes.
+   `<project>/<lane>`; inside the repo you may write it `./<lane>`.
+   - **Exit 4 means "run it on the iMac":** the worker lacks this checkout's files and copying them first would take
+     over a minute (fleet sends nothing). Do that track yourself, as a local subagent with the same brief (it counts
+     toward the 6), and start `fleet sync . --host <worker>` in the background so later lanes find the files there.
+     Pass `--copy-anyway` only when the user would rather wait for the copy than load the iMac.
+   - Workers that already hold a repo's files are chosen first, and then only changes travel.
 4. **Wait without polling:** run `fleet wait ./<lane>` in the background, one per lane, so you are notified as each
    ends. Meanwhile, do the iMac-only tracks yourself.
 5. **Collect** each finished lane:
@@ -94,4 +98,5 @@ Watch a lane live with `fleet logs ./<lane> --follow`. Stop one with `fleet remo
 | A lane ends with refused tool calls | Report them; rerun with a brief that avoids them |
 | A lane ends with an error result about usage limits | Tell the user; rerun after the limit resets |
 | `fleet status` shows a lane as `gone` (the worker restarted) | Dispatch it again; its branch keeps whatever it had committed |
+| `fleet lane` exits 4, "run … on the iMac" | Run the track locally; `fleet sync . --host <worker>` in the background for next time |
 | `no worker can take a … lane now` | Wait for one of your lanes to end, or run the track locally; say which. "On battery": ask the user to plug the laptop in |
