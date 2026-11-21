@@ -1,0 +1,515 @@
+#!/usr/bin/env node
+// fleet: run Claude Code lanes on home-LAN workers, driven from the iMac (the orchestrator). Dependency-free.
+// The commands are listed in USAGE below; lanes live in lib/lanes.js. Data, tunnels and the scheduler come later
+// in the MVP (the "MVP plan" and "Runbook" tabs of the factory doc).
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+const { execFileSync, spawnSync } = require('child_process');
+const { HOME, STATE_DIR, say, fail, shq, now, workers, remote } = require('./lib/common');
+const lanes = require('./lib/lanes');
+
+const STATE_FILE = path.join(STATE_DIR, 'claude-sync.json');
+const LOCK_FILE = path.join(STATE_DIR, 'claude-sync.lock');
+const LOG_FILE = path.join(STATE_DIR, 'logs', 'claude-sync.log');
+const KC_SERVICE = 'fleet-claude-token';
+const JOB_LABEL = 'com.fleet.claude-sync';
+const PLIST = path.join(HOME, 'Library', 'LaunchAgents', `${JOB_LABEL}.plist`);
+const IMAC_CLAUDE = path.join(HOME, '.local', 'bin', 'claude');
+const TOKEN_SHAPE = /^[A-Za-z0-9._~+/=-]{20,}$/; // also keeps the Keychain command line safe
+
+// ---------- small helpers ----------
+
+function cmpVersion(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  return 0;
+}
+
+function notify(msg) {
+  // A macOS notification, so an automatic sync that needs you is seen.
+  spawnSync('osascript', ['-e', `display notification ${JSON.stringify(msg)} with title "fleet"`]);
+}
+
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  } catch {
+    return { workers: {} };
+  }
+}
+
+function writeState(st) {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(`${STATE_FILE}.tmp`, `${JSON.stringify(st, null, 2)}\n`);
+  fs.renameSync(`${STATE_FILE}.tmp`, STATE_FILE);
+}
+
+function withLock(fn) {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  try {
+    fs.writeFileSync(LOCK_FILE, String(process.pid), { flag: 'wx' });
+  } catch {
+    const pid = Number(fs.readFileSync(LOCK_FILE, 'utf8'));
+    let alive = false;
+    try {
+      process.kill(pid, 0); // signal 0 only tests that the process exists
+      alive = true;
+    } catch {}
+    if (alive) return { skipped: `another sync is running (pid ${pid})` };
+    fs.writeFileSync(LOCK_FILE, String(process.pid)); // stale lock from a crashed run
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(LOCK_FILE, { force: true });
+  }
+}
+
+// ---------- the iMac: which account, which version ----------
+
+function imacAccount() {
+  // ~/.claude.json is rewritten often; a read mid-write throws, and the caller simply tries again later.
+  const c = JSON.parse(fs.readFileSync(path.join(HOME, '.claude.json'), 'utf8'));
+  const o = c.oauthAccount;
+  if (!o || !o.accountUuid) return null;
+  return {
+    key: `${o.accountUuid}:${o.organizationUuid || '-'}`,
+    email: o.emailAddress || '',
+    org: o.organizationName || '',
+  };
+}
+
+function imacCliVersion() {
+  // The terminal `claude` is a symlink into ~/.local/share/claude/versions/<version>; reading it costs no process.
+  try {
+    const m = /(\d+\.\d+\.\d+)/.exec(fs.readlinkSync(IMAC_CLAUDE));
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function imacVersion() {
+  // One thing updates, everything else follows: the orchestrator sessions run in the VS Code extension, which
+  // VS Code keeps up to date, so its newest installed build is the version. The terminal CLI and every worker
+  // follow it. Without the extension, the terminal CLI is the version.
+  const found = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(path.join(HOME, '.vscode', 'extensions'));
+  } catch {}
+  for (const e of entries) {
+    const m = /^anthropic\.claude-code-(\d+\.\d+\.\d+)/.exec(e);
+    if (m) found.push(m[1]);
+  }
+  return found.sort(cmpVersion).pop() || imacCliVersion();
+}
+
+function alignImacCli(version) {
+  // Returns true when it moved the terminal CLI, false when that failed, null when nothing was needed.
+  const cli = imacCliVersion();
+  if (!version || !cli || cli === version) return null;
+  const r = spawnSync(IMAC_CLAUDE, ['install', version], { encoding: 'utf8', timeout: 300000 });
+  if (imacCliVersion() === version) {
+    say(`iMac terminal claude: ${cli} → ${version}`);
+    return true;
+  }
+  say(`iMac terminal claude: could not move ${cli} → ${version}: ${(r.stderr || r.stdout || '').trim().split('\n').pop()}`);
+  return false;
+}
+
+// ---------- the iMac Keychain ----------
+
+function tokenFor(key) {
+  try {
+    const out = execFileSync('security', ['find-generic-password', '-s', KC_SERVICE, '-a', key, '-w'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+function storeToken(key, label, token) {
+  if (!TOKEN_SHAPE.test(token)) fail('that does not look like a Claude token');
+  // Through `security -i` on stdin, so the token never appears in a command line.
+  spawnSync('security', ['-i'], {
+    input: `add-generic-password -U -s ${KC_SERVICE} -a "${key}" -l "${label.replace(/["\\]/g, '')}" -w "${token}"\n`,
+    encoding: 'utf8',
+  });
+  if (tokenFor(key) !== token) fail('could not store the token in the Keychain');
+}
+
+function storedTokens() {
+  // Labels and account keys only, never the tokens.
+  const out = spawnSync('security', ['dump-keychain'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).stdout || '';
+  const items = [];
+  for (const block of out.split('keychain: ').slice(1)) {
+    if (!block.includes(`"svce"<blob>="${KC_SERVICE}"`)) continue;
+    const acct = /"acct"<blob>="([^"]*)"/.exec(block);
+    const label = /0x00000007 <blob>="([^"]*)"/.exec(block);
+    items.push({ key: acct ? acct[1] : '?', label: label ? label[1] : '' });
+  }
+  return items;
+}
+
+function tokenIdentity(token) {
+  // Ask Claude Code who the token signs in as, in a throwaway config folder so the iMac's own sign-in is untouched.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-claude-'));
+  try {
+    const r = spawnSync(IMAC_CLAUDE, ['auth', 'status'], {
+      env: { PATH: process.env.PATH, HOME, CLAUDE_CONFIG_DIR: dir, CLAUDE_CODE_OAUTH_TOKEN: token },
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    return JSON.parse(r.stdout);
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---------- the workers ----------
+
+function workerState(host) {
+  const out = remote(
+    host,
+    [
+      'f=~/.config/fleet',
+      'printf "key=%s\\n" "$(sed -n 1p $f/claude-account 2>/dev/null)"',
+      'printf "token=%s\\n" "$([ -s $f/env ] && echo yes || echo no)"',
+      'printf "version=%s\\n" "$(claude --version 2>/dev/null | grep -oE "[0-9]+\\.[0-9]+\\.[0-9]+" | head -1)"',
+      'printf "sessions=%s\\n" "$(pgrep -x claude | wc -l)"',
+    ].join('; '),
+  );
+  return Object.fromEntries(
+    out
+      .trim()
+      .split('\n')
+      .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
+  );
+}
+
+function pushToken(host, acct, token) {
+  // Atomic replace of the env file (mode 600); the token travels on stdin, never in a command line.
+  remote(
+    host,
+    'umask 077; mkdir -p ~/.config/fleet && cat > ~/.config/fleet/env.tmp && mv -f ~/.config/fleet/env.tmp ~/.config/fleet/env' +
+      ` && printf "%s\\n%s\\n" ${shq(acct.key)} ${shq(acct.email)} > ~/.config/fleet/claude-account`,
+    `export CLAUDE_CODE_OAUTH_TOKEN=${shq(token)}\n`,
+  );
+}
+
+function verifyWorker(host, acct) {
+  const status = JSON.parse(remote(host, 'claude auth status'));
+  if (!status.loggedIn) throw new Error('Claude Code reports it is not signed in');
+  if (status.email && acct.email && status.email.toLowerCase() !== acct.email.toLowerCase()) {
+    throw new Error(`signed in as ${status.email}, expected ${acct.email}`);
+  }
+  return status;
+}
+
+// ---------- commands ----------
+
+function sync({ only = [], ifChanged = false, quiet = false } = {}) {
+  const log = quiet ? () => {} : say;
+  const result = withLock(() => {
+    let acct;
+    try {
+      acct = imacAccount();
+    } catch {
+      return { skipped: '~/.claude.json was being written; trying again later' };
+    }
+    const version = imacVersion();
+    const st = readState();
+    // An automatic run retries a failed CLI install only when the version changes; a manual run always tries.
+    if (!(ifChanged && st.cliFailedFor === version)) {
+      const moved = alignImacCli(version);
+      if (moved === false) st.cliFailedFor = version;
+      else if (moved) delete st.cliFailedFor;
+      if (moved !== null) writeState(st);
+    }
+    const targets = workers(only);
+    const inSync = (w) => {
+      const s = st.workers[w.name];
+      return s && s.ok && s.key === acct?.key && s.version === version;
+    };
+
+    if (!acct) {
+      log('The iMac is not signed in to a Claude account; workers left as they are.');
+      return { ok: true };
+    }
+    if (ifChanged && targets.every(inSync)) return { ok: true, unchanged: true };
+
+    const token = tokenFor(acct.key);
+    if (!token) {
+      const msg = `No worker token for ${acct.email}${acct.org ? ` (${acct.org})` : ''}. On the iMac run: fleet claude add`;
+      if (st.missingTokenFor !== acct.key) notify(msg);
+      st.missingTokenFor = acct.key;
+      writeState(st);
+      say(msg);
+      return { ok: false };
+    }
+    delete st.missingTokenFor;
+
+    log(`iMac: ${acct.email}${acct.org ? ` (${acct.org})` : ''}, Claude Code ${version || 'unknown'}`);
+    const failures = [];
+    for (const w of targets) {
+      if (ifChanged && inSync(w)) continue;
+      const prev = st.workers[w.name] || {};
+      try {
+        const cur = workerState(w.name);
+        const changes = [];
+        if (cur.key !== acct.key || cur.token !== 'yes') {
+          pushToken(w.name, acct, token);
+          changes.push(`account → ${acct.email}`);
+        }
+        if (version && cur.version !== version) {
+          remote(w.name, `claude install ${shq(version)} >/dev/null`);
+          changes.push(`Claude Code ${cur.version || 'none'} → ${version}`);
+        }
+        const status = verifyWorker(w.name, acct);
+        const after = workerState(w.name);
+        if (version && after.version !== version) throw new Error(`still on Claude Code ${after.version}`);
+        st.workers[w.name] = { ok: true, key: acct.key, version, email: status.email || acct.email, at: now() };
+        const running = Number(cur.sessions) || 0;
+        const note = changes.length && running ? ` (${running} running session(s) keep the old setting until they finish)` : '';
+        const line = `${w.name}: ${changes.length ? changes.join(', ') : 'already in sync'}; signed in${note}`;
+        if (changes.length) say(line);
+        else log(line);
+      } catch (e) {
+        st.workers[w.name] = { ok: false, error: e.message, at: now() };
+        failures.push(`${w.name}: ${e.message}`);
+        if (prev.ok !== false || prev.error !== e.message) notify(`${w.name} not synced: ${e.message}`);
+        say(`${w.name}: NOT synced: ${e.message}`);
+      }
+    }
+    st.account = acct.key;
+    st.version = version;
+    st.at = now();
+    writeState(st);
+    return { ok: failures.length === 0 };
+  });
+  if (result.skipped && !quiet) say(result.skipped);
+  return result.ok === false ? 1 : 0;
+}
+
+function tokenFromWorker(host) {
+  // Read a token already on a worker; it stays in this process's memory and is never printed.
+  const out = remote(host, 'cat ~/.config/fleet/env 2>/dev/null');
+  const m = /^export CLAUDE_CODE_OAUTH_TOKEN=['"]?([^'"\s]+)['"]?\s*$/m.exec(out);
+  if (!m) fail(`no token in ${host}:~/.config/fleet/env`);
+  return m[1];
+}
+
+async function add({ haveToken, from }) {
+  let acct;
+  try {
+    acct = imacAccount();
+  } catch {
+    fail('could not read ~/.claude.json; try again');
+  }
+  if (!acct) fail('the iMac is not signed in to Claude; sign in first (claude, then /login), then run this again');
+  say(`The iMac is signed in as ${acct.email}${acct.org ? ` (${acct.org})` : ''}.`);
+  let token;
+  if (from) {
+    say(`Taking the token already on ${from}, for ${acct.email}.`);
+    token = tokenFromWorker(from);
+  } else {
+    if (!haveToken) {
+      say(`Creating a long-lived token for it. In the browser, approve it as ${acct.email}.\n`);
+      spawnSync(IMAC_CLAUDE, ['setup-token'], { stdio: 'inherit' });
+    }
+    token = await askHidden('\nPaste the token (it stays hidden): ');
+  }
+  if (!TOKEN_SHAPE.test(token)) fail('that does not look like a Claude token; nothing stored');
+  // A setup-token token can run Claude but cannot read its own profile, so this proves it signs in, not whose
+  // account it is: the browser that approved it must be signed in to the same account as the iMac.
+  const id = tokenIdentity(token);
+  if (!id || !id.loggedIn) fail('that token does not sign in; nothing stored');
+  if (id.email && acct.email && id.email.toLowerCase() !== acct.email.toLowerCase()) {
+    fail(`that token belongs to ${id.email}, but the iMac is signed in as ${acct.email}; nothing stored`);
+  }
+  storeToken(acct.key, `fleet Claude token: ${acct.email}${acct.org ? ` / ${acct.org}` : ''}`, token);
+  say(`Stored in the iMac Keychain for ${acct.email}. Syncing the workers now.\n`);
+  return sync({});
+}
+
+function status() {
+  let acct = null;
+  try {
+    acct = imacAccount();
+  } catch {}
+  const version = imacVersion();
+  const cli = imacCliVersion();
+  say(`iMac:   ${acct ? `${acct.email}${acct.org ? ` (${acct.org})` : ''}` : 'not signed in'}, Claude Code ${version || 'unknown'}`);
+  say(`        terminal claude ${cli || 'not installed'}${cli && version && cli !== version ? ' (differs: fleet claude sync moves it)' : ''}`);
+  const tokens = storedTokens();
+  say(`Tokens: ${tokens.length ? tokens.map((t) => t.label.replace('fleet Claude token: ', '')).join('; ') : 'none stored (fleet claude add)'}`);
+  if (acct && !tokens.some((t) => t.key === acct.key)) say('        none for the account the iMac is signed in to: run fleet claude add');
+  const job = spawnSync('launchctl', ['print', `gui/${process.getuid()}/${JOB_LABEL}`], { encoding: 'utf8' });
+  say(`Auto:   ${job.status === 0 ? 'on (fleet claude watch off to stop)' : 'off (fleet claude watch on)'}`);
+  for (const w of workers()) {
+    try {
+      const cur = workerState(w.name);
+      const acctOk = acct && cur.key === acct.key && cur.token === 'yes';
+      const verOk = !version || cur.version === version;
+      const which = acctOk
+        ? 'same account as the iMac'
+        : cur.token !== 'yes'
+          ? 'no token'
+          : cur.key
+            ? 'a DIFFERENT account from the iMac'
+            : 'a token not set by fleet (account unknown)';
+      say(`${w.name}: ${which}, Claude Code ${cur.version || 'none'}${verOk ? '' : ' (differs)'}, ${cur.sessions} session(s) running`);
+    } catch (e) {
+      say(`${w.name}: unreachable (${e.message})`);
+    }
+  }
+  return 0;
+}
+
+function watch(mode) {
+  const uid = process.getuid();
+  spawnSync('launchctl', ['bootout', `gui/${uid}/${JOB_LABEL}`], { stdio: 'ignore' });
+  if (mode === 'off') {
+    fs.rmSync(PLIST, { force: true });
+    say('Automatic sync is off. Run fleet claude sync by hand when you switch accounts.');
+    return 0;
+  }
+  if (mode !== 'on') fail('usage: fleet claude watch on|off');
+  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  const watched = [path.join(HOME, '.claude.json'), path.join(HOME, '.vscode', 'extensions'), path.join(HOME, '.local', 'share', 'claude', 'versions')];
+  const xml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${JOB_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xml(process.execPath)}</string>
+    <string>${xml(fs.realpathSync(__filename))}</string>
+    <string>claude</string><string>sync</string><string>--if-changed</string><string>--quiet</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>${xml(`${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`)}</string></dict>
+  <key>WatchPaths</key>
+  <array>${watched.map((p) => `<string>${xml(p)}</string>`).join('')}</array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>${xml(LOG_FILE)}</string>
+  <key>StandardErrorPath</key><string>${xml(LOG_FILE)}</string>
+</dict>
+</plist>
+`;
+  fs.mkdirSync(path.dirname(PLIST), { recursive: true });
+  fs.writeFileSync(PLIST, plist);
+  const r = spawnSync('launchctl', ['bootstrap', `gui/${uid}`, PLIST], { encoding: 'utf8' });
+  if (r.status !== 0) fail(`launchctl bootstrap failed: ${(r.stderr || '').trim()}`);
+  say('Automatic sync is on: it runs when the iMac switches Claude account or updates Claude Code, and every 5 minutes.');
+  say(`Log: ${LOG_FILE}`);
+  return 0;
+}
+
+function askHidden(question) {
+  return new Promise((resolve) => {
+    if (!process.stdin.isTTY) fail('run this in a terminal, so the token can be pasted');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl._writeToOutput = (s) => {
+      if (s.includes(question)) process.stdout.write(s); // echo the prompt, never the pasted text
+    };
+    rl.question(question, (answer) => {
+      rl.close();
+      process.stdout.write('\n');
+      resolve(answer.trim());
+    });
+  });
+}
+
+// ---------- dispatch ----------
+
+const USAGE = `usage:
+  fleet status                      workers, their load and memory, and every lane
+  fleet add <ip> --name worker-NN [--slots 2] [--role lanes] [--account <login>]
+                                    turn a freshly installed Ubuntu laptop into a worker
+  fleet lane <project> <lane> --host <worker> --base <branch|commit> --brief <path>
+             [--profile research|build] [--branch <b>] [--model <m>] [--effort high]
+                                    start an unattended Claude Code lane on a worker. research lanes are light
+                                    (research_slots), read code and the web, and write only context/research/
+  fleet wait <project>/<lane> [--timeout <min>]
+                                    return when the lane ends, with its result and refused tool calls
+  fleet logs <project>/<lane> [--follow] [--setup] [--raw]
+                                    the lane's session (or its recipe setup log)
+  fleet fetch <project>/<lane> [--push]
+                                    bring the lane branch to the iMac's repo (and push it to origin)
+  fleet remove <project>/<lane> [--force] [--delete-branch]
+                                    stop and clean up the lane; its logs are kept in ~/.fleet/lanes-archive
+
+  fleet claude add [--have-token | --from <worker>]
+                                    store a long-lived token for the account the iMac is signed in to
+  fleet claude sync [worker...]     make the workers use the iMac's account and Claude Code version
+  fleet claude status               the iMac's account and version, and each worker's
+  fleet claude watch on|off         sync automatically when the iMac switches account or updates Claude Code
+
+  (data, tunnels and the scheduler come later in the MVP)`;
+
+async function main(argv) {
+  const [group, cmd, ...rest] = argv;
+  const ctx = { claudeSync: sync };
+  switch (group) {
+    case 'status':
+      return lanes.status();
+    case 'add':
+      return lanes.addWorker(argv.slice(1), ctx);
+    case 'lane':
+      return lanes.lane(argv.slice(1), ctx);
+    case 'wait':
+      return lanes.wait(argv.slice(1));
+    case 'logs':
+      return lanes.logs(argv.slice(1));
+    case 'fetch':
+      return lanes.fetch(argv.slice(1));
+    case 'remove':
+      return lanes.remove(argv.slice(1));
+    case 'claude':
+      break;
+    default:
+      say(USAGE);
+      return group && group !== 'help' && group !== '--help' ? 2 : 0;
+  }
+  const flags = rest.filter((a) => a.startsWith('--'));
+  const args = rest.filter((a) => !a.startsWith('--'));
+  switch (cmd) {
+    case 'add': {
+      const i = rest.indexOf('--from');
+      const from = i >= 0 ? rest[i + 1] : (flags.find((f) => f.startsWith('--from=')) || '').slice(7) || null;
+      if (from) workers([from]); // must be a known worker
+      return add({ haveToken: flags.includes('--have-token'), from });
+    }
+    case 'sync':
+      return sync({ only: args, ifChanged: flags.includes('--if-changed'), quiet: flags.includes('--quiet') });
+    case 'status':
+      return status();
+    case 'watch':
+      return watch(args[0]);
+    default:
+      say(USAGE);
+      return 2;
+  }
+}
+
+main(process.argv.slice(2)).then(
+  (code) => process.exit(code || 0),
+  (e) => fail(e.stack || e.message),
+);
