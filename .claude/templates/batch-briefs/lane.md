@@ -1,5 +1,5 @@
 <!-- Brief for lane <lane>, <date>. Relaunch with this text plus the resume preface in
-~/.claude/commands/_shared-agent-tracking.md. Keep under 60 lines: point at sections, don't paste them. -->
+$WH/.claude/commands/_shared-agent-tracking.md (installed at ~/.claude/commands after release). Keep under 60 lines: point at sections, don't paste them. -->
 
 Read `context/batch-briefs/_common.md` first: the programme rules and `## Delta: <set>`. Both are binding.
 
@@ -21,7 +21,8 @@ a contract-first cycle, a merge note from an earlier lane.>
 
 **Commands:** as `_common.md` lists them; for this lane `{base}` = `<sha>`.
 
-**Effort:** high (`~/.claude/commands/_shared-effort-budget.md`, row "Implementation lane").
+**Effort:** high (`$WH/.claude/commands/_shared-effort-budget.md`, installed at `~/.claude/commands` after
+release; row "Implementation lane").
 
 **Screens (if any):** `<screen ids>`: wireframes `<paths>`, mockups `<paths>` and their states.
 

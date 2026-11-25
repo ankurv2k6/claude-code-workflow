@@ -32,13 +32,18 @@ and the orchestrator never polls, so a stalled lane sat unnoticed for hours)
 
 A lane is **stalled** when, for `limits.stall_minutes` (default 45; no profile: `stall_minutes` in the
 task-list header), none of these moved and no notification arrived: its latest commit, its
-`.lane/progress.md`, its newest file in `logs_dir`. **A lane holding a heavy-job slot is not stalled**: a long
-gate is running.
+`.lane/progress.md`, its newest file in `logs_dir` (an absolute, shared `logs_dir`: the files naming the
+lane). **A lane is not stalled while** it holds a heavy-job slot (slot.sh records its own pid and its
+command's, so a killed slot.sh still counts while the command runs; a `self_locking` job's own lock files
+count too), waits in the queue for one (slot.sh's `<lock_dir>/waiting/<pid>` marker), or has a live
+process whose cwd is inside its worktree (a long test run; `lsof -a -d cwd` on macOS, `/proc/*/cwd` on
+Linux). The report names the process, so a dev server the lane left running is easy to spot; `--no-proc`
+turns that check off.
 
 Start it once the first lane is running, in the background, so its exit wakes you:
 
 ```bash
-node "${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/scripts/workflow/watchdog.mjs" --task-list <task list> --stall-minutes <n>
+node "$WH/scripts/workflow/watchdog.mjs" --task-list <task list> --stall-minutes <n>   # WH per _shared-project-profile.md
 ```
 
 It checks every 5 minutes. **Exit 3:** a lane is stalled; its report names the lane. Act (below), then

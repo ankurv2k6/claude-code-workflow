@@ -12,11 +12,14 @@ maintainability; pick the best; record it in the module blueprint's §11 Deviati
 
 ## Binding, by section (already loaded or read by anchor; never copied here)
 
-- `~/.claude/commands/_shared-autonomous.md` §3–§4.
+Skills: `$WH/.claude/commands/<file>` (installed at `~/.claude/commands` after release; `<WH>` is written
+out by the orchestrator, `_shared-project-profile.md`).
+
+- `$WH/.claude/commands/_shared-autonomous.md` §3–§4.
 - The project's invariants and guardrails: `<docs.invariants>` and `<docs.guardrails>` from the profile
   (no profile: CLAUDE.md's invariants section and `## Hard guardrails`). Only the rules a lane can act on
   apply to you; nothing here widens what a lane may touch.
-- `~/.claude/commands/implement-plan.md` in `--lane` mode, for each module in the order your brief gives.
+- `$WH/.claude/commands/implement-plan.md` in `--lane` mode, for each module in the order your brief gives.
   If the Skill tool is unavailable, read the file and follow it.
 
 ## Reading
@@ -33,9 +36,9 @@ maintainability; pick the best; record it in the module blueprint's §11 Deviati
 | Shell, first | `<shell_prefix>` |
 | Each task | `<commands.test_task>`, all changed files in one call |
 | Each commit | `<tiers.per_commit gates>`, or nothing by hand when the pre-commit hook runs them |
-| Lane end, once | `<tiers.lane_end gates>`, then `<commands.test_lane_end>` |
+| Lane end, once | `node <WH>/scripts/workflow/run-tier.mjs lane_end --parallel --base <sha>`, then `<commands.test_lane_end>` |
 | Typecheck | `<commands.typecheck>` (incremental; `<commands.typecheck_clean>` only after a stale-build error) |
-| Heavy gate | through `slot.sh`, per `~/.claude/commands/_shared-test-selection.md` |
+| Heavy gate | through `slot.sh`, per `$WH/.claude/commands/_shared-test-selection.md`; a `self_locking` job as is |
 
 No profile: the per-edit, per-commit and lane-end commands from `_shared-test-selection.md` and the
 project's commit gates (`_shared-commit-protocol.md`), written out here by the orchestrator.
@@ -49,8 +52,8 @@ project's commit gates (`_shared-commit-protocol.md`), written out here by the o
   commit, update `.lane/progress.md`, hand back `Session split`.
 - **UI:** build to the mockups. Read each screen's wireframe (its Information decisions table governs) and
   mockup with every state. Use the shared primitives and theme tokens; no colour literals. The parity proof
-  is your verifier's pass on the real stack (`~/.claude/commands/_shared-ui-parity.md`).
-- **Verification:** self-review against `~/.claude/commands/_shared-triage.md`, at most 2 sweeps. A
+  is your verifier's pass on the real stack (`$WH/.claude/commands/_shared-ui-parity.md`).
+- **Verification:** self-review against `$WH/.claude/commands/_shared-triage.md`, at most 2 sweeps. A
   separate verifier follows your lane.
 - **Commits:** one per task, task id in the subject (`feat(m12): T4 …`), through the project's gates.
   Never `--no-verify`. Migrations are additive; the orchestrator renumbers them at merge.

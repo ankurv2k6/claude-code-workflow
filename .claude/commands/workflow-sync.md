@@ -37,11 +37,12 @@ Read each source once. A missing one is recorded as "not found", not guessed.
 | Task list | `context/batch-progress.md` or the argument | Decision log, Owner corrections, Deferred findings, Owner items, stalls in the Checkpoint log |
 | Batch report | `context/batch-report-<set>.md` | final gate results, reds at cut end, integration fixes |
 | Verifier findings | the findings files the task list's Agents rows and notes point to | findings by module, and which gate could have caught each |
-| Build report | `<logs_dir>/build-report-<set>.md` | tokens, cost, active minutes and maximum context per agent and role |
+| Build report | `<logs_dir>/build-report-<set>.md` | tokens, cost, active minutes and maximum context per agent and role; the **Rule breaches** table (`--breaches`) and the **Critical path** split (`--critical-path`) |
 | Script drift | the profile's commands against what the briefs and Decision log ran; project copies of generic scripts against `$WH/scripts/workflow/` (`diff -q`; `WH` per `_shared-project-profile.md`) | commands changed by hand mid-batch, local forks of generic scripts |
 
 No build report yet: run `node "$WH/scripts/workflow/build-report.mjs" --session <orchestrator session id>
---since <task list started> --until <its last checkpoint time> --set <set>`, which writes
+--since <task list started> --until <its last checkpoint time> --set <set> --breaches --critical-path
+--task-list <task list>`, which writes
 `<logs_dir>/build-report-<set>.md`, and read only that file. The window keeps a session that ran several
 batches from counting the others: only transcript lines inside it count. Id unknown: `--all` with the same
 window, which also counts any other session of the project in it; say so in the sources line. Run inside a
@@ -58,6 +59,9 @@ A lesson is something that should change how the next batch runs. Candidates:
 - a finding repeated across modules, or one a gate should have caught earlier;
 - a red that reached cut end, or a known red that was not in the known-reds file;
 - a stall, a session past the context budget, a role far above its usual cost;
+- **every non-zero row of the Rule breaches table** (a whole-suite vitest in a lane, a clean typecheck, a
+  rehearsal in a lane or verifier, turns over budget, an orchestrator past 1.5 x budget): one lesson per
+  kind, with its count; and waiting time above building time in the Critical path;
 - script drift.
 
 Each lesson gets an id, one line of statement, and its evidence (artifact path and section). **Ids continue

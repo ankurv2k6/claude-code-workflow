@@ -6,7 +6,7 @@
 |----------|---------|
 | `~/.claude/commands/` | Shared skill commands (symlinked from `claudeworkflow`) |
 | `~/.claude/_repo/` | Agent repository catalog (read-only source) |
-| `~/.claude/templates/` | Task list, lane briefs, hard-guardrails snippet, test-map guide (symlinked from `claudeworkflow`) |
+| `~/.claude/templates/` | Task list, lane briefs, hard-guardrails snippet, test-map guide, profile schema, a user-level CLAUDE.md example (symlinked from `claudeworkflow`) |
 | `<project>/.claude/agents/` | Installed project-specific agents |
 | `<project>/.claude/sessions/` | Session ID files for Slack integration (gitignored) |
 | `<project>/context/implementation-status.md` | Cross-session module tracking |
@@ -17,7 +17,7 @@
 | `<project>/design/wireframes/` | UI design specs (Markdown + ASCII) |
 | `<project>/design/mockups/` | Interactive HTML prototypes |
 | `~/.claude/plans/` | Standalone/cross-project plan files |
-| `~/.claude/workflow-release/` | Pinned release checkout (`WORKFLOW_HOME`); scripts at `$WORKFLOW_HOME/scripts/workflow/` |
+| `~/.claude/workflow-release/` | Pinned release checkout; scripts at `$WH/scripts/workflow/` (`$WORKFLOW_HOME`, else this checkout, else the repo `~/.claude/commands` points into) |
 | `<project>/.claude/workflow-profile.json` | Project profile: commands, gates by tier, test DBs, limits (`_shared-project-profile.md`) |
 | `<project>/context/workflow-lessons.md` | Lessons per batch from `/workflow-sync` |
 

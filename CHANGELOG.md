@@ -32,6 +32,18 @@ to `~/.claude/workflow-release`). Project facts move to a per-project profile.
 `scripts/check-skills.mjs` now also fails on a profile key the schema does not define, and on the
 retired lane-sizing and lane-report phrases.
 
+### Review fixes (before the 2.0.0 tag)
+
+| Where | Change |
+|---|---|
+| profile | Gate kind `agent` (`verifier`, `asks`; `cmd` an optional read-only helper): skills launch it, it passes only on PASS, `--smoke` skips it. `heavy_jobs.<job>.self_locking` (never wrapped in `slot.sh`), `lock_dir` optional with a warning. `merge.renumber` / `merge.check`. `docs.release_branch`, `commands.cleanup_list`. `notes` allowed in the gate and job maps. `profile-check` warns on risk routes without a `reach-walk` gate and refuses a tier gate that is the full run |
+| `$WH` | Falls back to the repo `~/.claude/commands` points into when there is no release checkout; `workflow_version` is that repo's `VERSION` |
+| `/implement-batch` | The full run happens once, after the final's fixes merge. Merges go through `merge-lane.mjs`, which skips the merge tier when the verifier ran it green on the merged head. A lane-map check before each launch wave, a release-branch freshness check and a usage note. The invariant gates also run once after the first merge. The contracts lane always gets a specialist verifier. Owner questions only after the plan and before a deploy. Restart notes at milestones. The close records rule breaches, escaped defects, the critical-path split, time to owner acceptance and the cleanup list |
+| verifiers | Merge the integration head once, again only if it moved; run the merge tier once on the final head and record its sha |
+| scripts | New `run-tier.mjs` and `merge-lane.mjs`. `slot.sh` records the command's pid, recovers pid-less locks and marks queued callers; the watchdog counts them, a self-locking job's own locks and live processes in a worktree. The scaffold locks the port registry, creates an integration test DB and validates waits against the task list. `build-report.mjs --breaches --critical-path`. Scripts call `bash` from `PATH` |
+| templates | Skills cited as `$WH/.claude/commands/…`; the task list gains `integration_test_db`, `accepted_on_beta` and a Close table; `user-CLAUDE.example.md`, a generic user-level draft that is never installed |
+| effort | One UI lane per batch may pilot a cheaper model when `agents.overrides` names `ui-lane-pilot`; verifiers never move |
+
 ### Switch-over (owner)
 
 In this order, so that no project ever runs a mix of versions:

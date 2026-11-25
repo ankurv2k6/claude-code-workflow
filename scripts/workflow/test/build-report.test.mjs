@@ -232,7 +232,7 @@ test('critical path: building, checking (a verifier\'s fix work counts as buildi
 
 test('build-report --critical-path reads the task list and reports the parts, the orchestrator context and acceptance', (t) => {
   const f = fixture(t);
-  let tl = taskList([{ lane: 'A', id: 'agent-a', worktree: '/w/my-app-wt/demo-a' }]).replace(/^started: .*$/m, 'started: 2026-01-01').replace(/^status: .*$/m, 'status: completed\naccepted_on_beta: 2026-01-02');
+  let tl = taskList([{ lane: 'A', id: 'agent-a', worktree: '/w/my-app-wt/demo-a' }]).replace(/^started: .*$/m, 'started: 2026-01-01').replace(/^status: .*$/m, 'status: completed').replace(/^accepted_on_beta: .*$/m, 'accepted_on_beta: 2026-01-02');
   const tlp = write(join(f.d, 'tl.md'), tl);
   const r = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--critical-path', '--task-list', tlp, '--out', join(f.d, 'o.md')]);
   assert.equal(r.code, 0, r.err);
