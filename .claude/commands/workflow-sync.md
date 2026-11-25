@@ -118,10 +118,13 @@ port or email address (`[[:alnum:]._%+-]+@[[:alnum:].-]+`), and rewrite every hi
 
 ## Step 8: Record and report
 
-- In the task list: the Lessons section lists the applied changes, the proposals and the Owner items;
-  each Owner item also gets a row in the Owner items table.
-- Commit the project files (`context/workflow-lessons.md`, the task list):
+- **Run by the batch's orchestrator (`--apply-additions`):** in the task list, the Lessons section lists the applied
+  changes, the proposals and the Owner items; each Owner item also gets a row in the Owner items table. Commit the
+  project files (`context/workflow-lessons.md`, the task list, the profile):
   `chore(workflow): lessons from <set>` (`_shared-commit-protocol.md`).
+- **Run by hand:** never write the task list, because the orchestrator is its only writer, and a batch may still be
+  live. Write and commit only `context/workflow-lessons.md`, with the Owner items listed at its top for the owner or
+  the next orchestrator to carry into a task list.
 - Report in at most 30 lines: lessons by class, changes applied, Owner items, proposal paths.
 
 ## When a script is absent
