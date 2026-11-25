@@ -5,13 +5,15 @@ description: Harvest a finished batch's lessons from its artifacts on disk, clas
 
 # Workflow sync
 
-**Command**: `/workflow-sync [task-list-or-report]`
+**Command**: `/workflow-sync [task-list-or-report] [--apply-additions] [--dry-run] [--proposals-dir <dir>]`
 **Usage**:
 
 - `/workflow-sync`: the current batch, `context/batch-progress.md`
 - `/workflow-sync <path>`: an archived task list or batch report
 - `--apply-additions`: passed only by `/implement-batch` as its last step. Without it nothing is applied
 - `--dry-run`: print the lessons and the diff; write nothing
+- `--proposals-dir <dir>`: where the generic proposals go (default: the workflow repo's
+  `context/proposals/`, i.e. `~/claudeworkflow/context/proposals/`; never `$WORKFLOW_HOME`)
 
 Protocol: `_shared-project-profile.md` (classification, apply by risk, provenance).
 
@@ -39,9 +41,13 @@ Read each source once. A missing one is recorded as "not found", not guessed.
 | Script drift | the profile's commands against what the briefs and Decision log ran; project copies of generic scripts against `$WH/scripts/workflow/` (`diff -q`; `WH` per `_shared-project-profile.md`) | commands changed by hand mid-batch, local forks of generic scripts |
 
 No build report yet: run `node "$WH/scripts/workflow/build-report.mjs" --session <orchestrator session id>
---set <set>` (id unknown: `--all --since <batch start date>`, which also counts any other session of the
-project in that window; say so in the sources line), which writes `<logs_dir>/build-report-<set>.md`, and read only that file. Cost appears only
-with `--prices <file>`; without a price table, report tokens and minutes and write "cost: no price table".
+--since <task list started> --until <its last checkpoint time> --set <set>`, which writes
+`<logs_dir>/build-report-<set>.md`, and read only that file. The window keeps a session that ran several
+batches from counting the others: only transcript lines inside it count. Id unknown: `--all` with the same
+window, which also counts any other session of the project in it; say so in the sources line. Run inside a
+worktree, the script reads the main checkout's transcripts (`--slug <slug>` overrides, a leading `-` is
+fine). Cost appears only with `--prices <file>`; without a price table, report tokens and minutes and
+write "cost: no price table".
 
 ## Step 2: Find the lessons
 
@@ -54,7 +60,9 @@ A lesson is something that should change how the next batch runs. Candidates:
 - a stall, a session past the context budget, a role far above its usual cost;
 - script drift.
 
-Each lesson gets an id (`L1`…), one line of statement, and its evidence (artifact path and section).
+Each lesson gets an id, one line of statement, and its evidence (artifact path and section). **Ids continue
+the lessons file:** read the highest `L<n>` already in `context/workflow-lessons.md` (`grep -o '| L[0-9]*'`,
+none: 0) and number this batch's lessons from the next one, so ids never collide across batches.
 
 ## Step 3: Classify
 
@@ -94,15 +102,16 @@ Sources: <each source path, or "not found">
 
 | Id | Lesson | Class | Evidence | Action |
 |---|---|---|---|---|
-| L1 | <one line> | profile | <path §section> | applied: tiers.merge + typecheck |
-| L2 | <one line> | skill | <path §section> | proposal: <file name> |
-| L3 | <one line> | project CLAUDE.md | <path §section> | Owner item |
+| L<n+1> | <one line> | profile | <path §section> | applied: tiers.merge + typecheck |
+| L<n+2> | <one line> | skill | <path §section> | proposal: <file name> |
+| L<n+3> | <one line> | project CLAUDE.md | <path §section> | Owner item |
 ```
 
 ## Step 7: Write the generic proposals
 
-For each skill-class lesson, write `~/claudeworkflow/context/proposals/<date>-<slug>.md` (the workflow
-repo's working tree, never `$WORKFLOW_HOME`). Do not commit it; it is an Owner item.
+For each skill-class lesson, write `<proposals dir>/<date>-<slug>.md`: `--proposals-dir`, else the
+workflow repo's working tree `~/claudeworkflow/context/proposals/`, never `$WORKFLOW_HOME`. Do not commit it;
+it is an Owner item. A file of that name already there gets a `-2`, `-3`… suffix, never an overwrite.
 
 ```markdown
 # <generic title>
@@ -124,8 +133,9 @@ port or email address (`[[:alnum:]._%+-]+@[[:alnum:].-]+`), and rewrite every hi
   project files (`context/workflow-lessons.md`, the task list, the profile):
   `chore(workflow): lessons from <set>` (`_shared-commit-protocol.md`).
 - **Run by hand:** never write the task list, because the orchestrator is its only writer, and a batch may still be
-  live. Write and commit only `context/workflow-lessons.md`, with the Owner items listed at its top for the owner or
-  the next orchestrator to carry into a task list.
+  live. A hand run commits only the lessons file: write and commit `context/workflow-lessons.md`, with the Owner
+  items listed at its top for the owner or the next orchestrator to carry into a task list. The proposals stay
+  uncommitted in the proposals dir.
 - Report in at most 30 lines: lessons by class, changes applied, Owner items, proposal paths.
 
 ## When a script is absent
