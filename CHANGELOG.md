@@ -34,14 +34,20 @@ retired lane-sizing and lane-report phrases.
 
 ### Switch-over (owner)
 
-1. Tag the last 1.x commit `v1.0.0` and the merged v2 commit `v2.0.0`.
-2. `scripts/workflow/release.sh v2.0.0` prints the plan; read it.
-3. `scripts/workflow/release.sh v2.0.0 --apply` creates the pinned checkout at
-   `~/.claude/workflow-release` and points `~/.claude/commands` and `~/.claude/templates` at it.
+In this order, so that no project ever runs a mix of versions:
+
+1. `scripts/workflow/release.sh v1.0.0 --apply`: tag the last 1.x commit `v1.0.0` first if it is not
+   tagged, then pin every project to v1 (`~/.claude/commands` and `~/.claude/templates` point at the
+   pinned checkout `~/.claude/workflow-release`). Run it once without `--apply` and read the plan first.
+2. Merge the v2 branch into `main` and tag the merge commit `v2.0.0`.
+3. `scripts/workflow/release.sh v2.0.0 --apply` moves the pinned checkout to v2.
 4. Optional, per project: copy `.claude/templates/workflow-profile.example.json` to
    `<project>/.claude/workflow-profile.json`, edit it, and run `profile-check.mjs` on it.
 5. A batch already in flight has no `workflow_version` and is treated as 1.0.0: on `--resume` it
    follows that version's text (`git -C ~/claudeworkflow show v1.0.0:.claude/commands/<file>`).
+
+Until step 1, `$WH` (`_shared-project-profile.md`) falls back to the repo `~/.claude/commands` points
+into, and `workflow_version` is that repo's `VERSION`.
 
 ### Rollback
 

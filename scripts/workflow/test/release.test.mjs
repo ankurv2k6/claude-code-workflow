@@ -98,3 +98,23 @@ test('release.sh refuses a destination that is not a detached, linked release wo
   assert.equal(head(), before, 'the main checkout never left its branch');
   assert.equal(sh(lane, 'git symbolic-ref --short HEAD', home), 'lane/x');
 });
+
+test('release.sh keeps each real directory aside under a unique name, even twice in one second', (t) => {
+  const { home, clone } = fixture(t);
+  write(join(home, '.claude', 'templates', 'one.md'), '1\n');
+  assert.equal(rel(home, 'v2.0.0', '--repo', clone, '--apply').code, 0);
+  // put a real directory back and switch again at once
+  sh(home, `rm ${join(home, '.claude', 'templates')} && mkdir ${join(home, '.claude', 'templates')} && echo 2 > ${join(home, '.claude', 'templates', 'two.md')}`, home);
+  assert.equal(rel(home, 'v2.0.1', '--repo', clone, '--apply').code, 0);
+  const kept = readdirSync(join(home, '.claude')).filter((n) => n.startsWith('templates.pre-release-'));
+  assert.equal(kept.length, 2, kept.join(', '));
+  assert.ok(kept.every((n) => /^templates\.pre-release-\d{8}-\d{6}-\d+(-\d+)?$/.test(n)), kept.join(', '));
+});
+
+test('release.sh --help gives the switch-over order: pin v1, merge and tag, then v2', () => {
+  const r = run('release.sh', ['--help']);
+  const i1 = r.out.indexOf('release.sh v1.0.0 --apply');
+  const i2 = r.out.indexOf('merge the new version into main');
+  const i3 = r.out.indexOf('release.sh v2.0.0 --apply');
+  assert.ok(i1 > 0 && i1 < i2 && i2 < i3, r.out);
+});
