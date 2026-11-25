@@ -17,6 +17,9 @@
 | `<project>/design/wireframes/` | UI design specs (Markdown + ASCII) |
 | `<project>/design/mockups/` | Interactive HTML prototypes |
 | `~/.claude/plans/` | Standalone/cross-project plan files |
+| `~/.claude/workflow-release/` | Pinned release checkout (`WORKFLOW_HOME`); scripts at `$WORKFLOW_HOME/scripts/workflow/` |
+| `<project>/.claude/workflow-profile.json` | Project profile: commands, gates by tier, test DBs, limits (`_shared-project-profile.md`) |
+| `<project>/context/workflow-lessons.md` | Lessons per batch from `/workflow-sync` |
 
 ---
 
@@ -36,6 +39,9 @@ For multi-module batch execution:
 **Notes**:
 - `/analyze-plan` runs automatically at the end of `/plan`
 - `/blueprint --verify` runs automatically after `/blueprint` unless `--no-verify` is specified
+- `/workflow-sync` runs as the last step of `/implement-batch`
+- **Versioning:** `VERSION` and `CHANGELOG.md`; `scripts/workflow/release.sh <tag> [--apply]` pins a release,
+  the previous tag rolls back; each batch follows the `workflow_version` in its task list
 
 ---
 
@@ -89,6 +95,7 @@ For multi-module batch execution:
 |---------|---------|-----------|--------|
 | **`/sync-context`** | Incrementally update context files (CLAUDE.md, status, registry) based on git history. Delta-based syncing. | `status` (show state only)<br>`--full` (ignore last sync)<br>`--dry-run` (preview)<br>`--verbose` | Updated context files, sync state |
 | **`/optimize-context`** | Audit and compress auto-loaded files (CLAUDE.md, rules, MEMORY.md). Extract sections to skills, path-scope rules, archive old plans. | `audit` (read-only report)<br>`--dry-run` (preview)<br>`--plans-age=<N>` (default 30 days)<br>`--docs-age=<N>` (default 60 days) | Audit report, compressed files, archived content |
+| **`/workflow-sync`** | Harvest a batch's lessons from disk, classify them, diff the project profile, apply only mechanical additions. Never edits a skill. | `[task-list-or-report]`<br>`--apply-additions` (orchestrator only)<br>`--dry-run` | `context/workflow-lessons.md`, profile diff, Owner items, proposals |
 
 ---
 
@@ -337,6 +344,7 @@ Displays per-module stub gate status from `context/implementation-status.md` and
 | `context/scratch/*-scratch-*.json` | `/analyze-plan`, `/verify-implementation` | Mid-phase findings checkpoints (deleted after phase) |
 | `context/sessions/context-audit-*.md` | `/optimize-context` | Context audit reports |
 | `context/TODOS.md` | `/todo` | Project TODO registry |
+| `context/workflow-lessons.md` | `/workflow-sync` | Classified lessons per batch |
 | `context/audit-commands/` | `/audit-commands` | Command audit baselines + reports |
 | `design/wireframes/**/*.md` | `/design-ui` | UI wireframes |
 | `design/mockups/**/*.html` | `/design-ui --with-mockups` | Interactive prototypes |
@@ -347,4 +355,5 @@ Displays per-module stub gate status from `context/implementation-status.md` and
 |------|---------|
 | `CLAUDE.md` | Project instructions (this file) |
 | `.claude/settings.json` | Tool permissions |
+| `.claude/workflow-profile.json` | Project profile for the workflow commands (optional; schema in `~/.claude/templates/`) |
 | `~/.claude/_repo/AGENT-INDEX.md` | Agent catalog index |

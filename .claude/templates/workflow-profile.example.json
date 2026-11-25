@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "project": "my-app",
+  "updated": "2026-11-25",
+  "notes": "Example profile. Copy to <project>/.claude/workflow-profile.json and replace every value.",
+  "docs": {
+    "invariants": "CLAUDE.md#project-invariants",
+    "guardrails": "CLAUDE.md#hard-guardrails",
+    "process": "context/development-process.md"
+  },
+  "shell_prefix": "unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN;",
+  "commands": {
+    "install": "pnpm install --frozen-lockfile",
+    "build": "pnpm -r build",
+    "test_task": "node scripts/test-select.mjs --files {files} --max-tier quick --run",
+    "test_lane_end": "node scripts/test-select.mjs --since {base} --max-tier standard --run",
+    "test_full": "pnpm test:full",
+    "typecheck": "pnpm typecheck",
+    "typecheck_clean": "pnpm typecheck:clean"
+  },
+  "gates": {
+    "lint-staged": { "cmd": "pnpm lint-staged", "kind": "check", "smoke": true, "notes": "The pre-commit hook runs this too." },
+    "typecheck": { "cmd": "pnpm typecheck", "kind": "check", "smoke": true },
+    "migration-journal": { "cmd": "node scripts/check-migrations.mjs", "kind": "check", "smoke": true },
+    "db-up": { "cmd": "pg_isready -h 127.0.0.1 -p 5432", "kind": "health", "smoke": true },
+    "invariant-check": { "cmd": "pnpm test:invariants", "kind": "rehearsal", "heavy": "rehearsal", "smoke": false },
+    "e2e": { "cmd": "pnpm test:e2e", "kind": "test", "heavy": "browser", "smoke": false }
+  },
+  "tiers": {
+    "per_commit": ["lint-staged"],
+    "lane_end": ["typecheck"],
+    "merge": ["typecheck", "migration-journal"],
+    "cut_end": ["invariant-check", "e2e"],
+    "track_merge": ["typecheck", "migration-journal", "invariant-check"]
+  },
+  "invariant_suites": ["tests/invariants"],
+  "risk_routing": [
+    { "paths": ["**/auth/**", "**/session/**"], "verifier": "security-engineer", "reason": "authentication and sessions" },
+    { "paths": ["**/migrations/**"], "verifier": "postgres-pro", "reason": "schema changes" }
+  ],
+  "heavy_jobs": {
+    "rehearsal": { "slots": 1, "lock_dir": "/tmp/my-app-slots/rehearsal" },
+    "browser": { "slots": 2, "lock_dir": "/tmp/my-app-slots/browser" }
+  },
+  "test_db": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "container": "my-app-testdb",
+    "name_pattern": "app_{set}_{lane}_test",
+    "create": "docker exec my-app-testdb createdb -U postgres {name}",
+    "bootstrap": "TEST_DATABASE_URL={url} pnpm test:bootstrap",
+    "allow_hosts": ["127.0.0.1", "localhost"]
+  },
+  "ports": { "range": [4400, 4999], "registry": ".claude/ports.json" },
+  "known_reds": "context/testing/known-reds.md",
+  "logs_dir": "logs",
+  "agents": { "max_concurrent": 6, "verifier_model": "opus", "overrides": { "doc-writer": "sonnet" } },
+  "limits": { "context_budget_tokens": 200000, "handback_lines": 30, "stall_minutes": 45 },
+  "provenance": [
+    { "path": "tiers.cut_end", "source": "context/batch-report-example.md", "date": "2026-11-25", "change": "added invariant-check" }
+  ]
+}
