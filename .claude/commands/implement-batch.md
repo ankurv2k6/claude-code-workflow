@@ -146,7 +146,8 @@ Commit the task list, the lane map and the briefs together.
 - **`--dry-run`:** no scaffold `--apply`. Smoke-run in the current checkout instead, with
   `node "$WH/scripts/workflow/profile-check.mjs" --profile .claude/workflow-profile.json --smoke --base <sha>
   --only gates.<name> … --only commands.<key> …`, naming each `smoke: true` gate and the same commands as
-  above. Never run `profile-check --smoke` without `--only`: it would also run `commands.test_full`.
+  above, and `commands.test_task` once by hand with one existing test file. Never run `profile-check
+  --smoke` without `--only`: it would also run `commands.test_full`.
 - **Script absent:** create each worktree at launch (Phase 1 step 1), take ports and test DBs as the briefs
   name them, and run each brief command (except `test_full`) once yourself on the base head.
 - **Known reds** (not on `--dry-run`): run the selection that covers the entries of the `known_reds` file
