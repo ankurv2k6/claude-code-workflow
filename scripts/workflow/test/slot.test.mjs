@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp, run, runAsync } from './helpers.mjs';
 
@@ -89,4 +89,67 @@ test('usage errors exit 2', () => {
   assert.equal(run('slot.sh', ['job', '0', '--', 'true']).code, 2);
   assert.equal(run('slot.sh', ['bad/job', '1', '--', 'true']).code, 2);
   assert.equal(run('slot.sh', ['job', '1']).code, 2);
+});
+
+test('the child pid is recorded: a kill -9 of slot.sh does not free the slot while the command runs', async (t) => {
+  const d = tmp(t);
+  const lock = join(d, 'locks');
+  const a = runAsync('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.1', '--', 'sleep', '4']);
+  for (let i = 0; i < 60 && !existsSync(join(lock, 'slot-1', 'child')); i++) await sleep(50);
+  const child = Number(readFileSync(join(lock, 'slot-1', 'child'), 'utf8'));
+  assert.ok(child > 0);
+  t.after(() => {
+    try {
+      process.kill(child);
+    } catch {}
+  });
+  const exited = new Promise((r) => a.child.once('exit', r)); // 'close' would wait for the command, which keeps the pipe
+  a.child.kill('SIGKILL'); // the script dies; its command keeps running
+  await exited;
+  const b = run('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.2', '--timeout', '1', '--', 'echo', 'ran']);
+  assert.equal(b.code, 75, 'the slot is still held by the running command');
+  assert.doesNotMatch(b.err, /reclaiming/);
+  const list = run('slot.sh', ['--list', 'job', '--lock-dir', lock]);
+  assert.match(list.out, new RegExp(`slot-1 pid=\\d+ child=${child} alive`));
+});
+
+test('INT and TERM are forwarded to the command, and the slot is released', async (t) => {
+  const d = tmp(t);
+  const lock = join(d, 'locks');
+  const mark = join(d, 'got-term');
+  const a = runAsync('slot.sh', ['job', '1', '--lock-dir', lock, '--', 'bash', '-c', `trap 'touch ${mark}; exit 0' TERM; while :; do sleep 0.1; done`]);
+  for (let i = 0; i < 60 && !existsSync(join(lock, 'slot-1', 'child')); i++) await sleep(50);
+  await sleep(200);
+  a.child.kill('SIGTERM');
+  const r = await a.done;
+  assert.ok(existsSync(mark), `the command saw TERM: ${r.err}`);
+  assert.ok(!existsSync(join(lock, 'slot-1')), 'slot released');
+});
+
+test('a slot with no pid file, older than --stale-after, is recovered; a fresh one is not', (t) => {
+  const d = tmp(t);
+  const lock = join(d, 'locks');
+  mkdirSync(join(lock, 'slot-1'), { recursive: true });
+  utimesSync(join(lock, 'slot-1'), new Date(Date.now() - 600e3), new Date(Date.now() - 600e3));
+  const r = run('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.1', '--timeout', '5', '--stale-after', '60', '--', 'echo', 'ran']);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.err, /recovering slot-1 of job \(no pid file after 60s\)/);
+  mkdirSync(join(lock, 'slot-1'), { recursive: true }); // just made by a caller about to write its pid
+  const fresh = run('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.1', '--timeout', '1', '--stale-after', '60', '--', 'echo', 'ran']);
+  assert.equal(fresh.code, 75);
+});
+
+test('a waiting caller writes waiting/<pid> for the watchdog and removes it when it takes the slot', async (t) => {
+  const d = tmp(t);
+  const lock = join(d, 'locks');
+  const a = runAsync('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.1', '--', 'sleep', '1']);
+  for (let i = 0; i < 60 && !existsSync(join(lock, 'slot-1', 'pid')); i++) await sleep(50);
+  const b = runAsync('slot.sh', ['job', '1', '--lock-dir', lock, '--poll', '0.1', '--holder', 'lane-b', '--', 'true']);
+  const marker = join(lock, 'waiting', String(b.child.pid));
+  for (let i = 0; i < 60 && !existsSync(marker); i++) await sleep(50);
+  assert.ok(existsSync(marker), 'marker written while waiting');
+  assert.equal(readFileSync(marker, 'utf8').split('\n')[0], 'lane-b');
+  const rb = (await Promise.all([a.done, b.done]))[1];
+  assert.equal(rb.code, 0, rb.err);
+  assert.ok(!existsSync(marker), 'marker removed');
 });
