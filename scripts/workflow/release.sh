@@ -16,7 +16,8 @@ Usage:
 
 What it does:
   1. creates a detached worktree of <repo> at <tag> in <dest>, or moves an existing one to <tag>
-     (refused if <dest> has local changes or is not a worktree of <repo>);
+     (refused if <dest> has local changes, is not a linked worktree of <repo>, is a directory
+     inside a checkout, or is on a branch: a release worktree is always detached);
   2. points ~/.claude/commands at <dest>/.claude/commands and ~/.claude/templates at
      <dest>/.claude/templates. An existing symlink is replaced; a real directory is never deleted:
      it is renamed to <name>.pre-release-<timestamp>.
@@ -78,6 +79,15 @@ if [ -e "$DEST" ] || [ -L "$DEST" ]; then
   [ -d "$DEST" ] || die "$DEST exists and is not a directory"
   DCOMMON=$(cd "$DEST" && d=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$d" && pwd -P) || die "$DEST is not a git worktree; move it aside first"
   [ "$DCOMMON" = "$COMMON" ] || die "$DEST is a worktree of another repo ($DCOMMON)"
+  # Only a linked, detached worktree is ours to move: never the repo's main working tree, a
+  # directory inside a checkout, or a worktree someone works in on a branch.
+  DTOP=$(cd "$(git -C "$DEST" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && pwd -P)
+  [ "$DTOP" = "$(cd "$DEST" && pwd -P)" ] || die "$DEST is inside the checkout $DTOP, not a release worktree"
+  DGIT=$(cd "$DEST" && cd "$(git rev-parse --git-dir)" && pwd -P)
+  [ "$DGIT" != "$DCOMMON" ] || die "$DEST is the main working tree of $REPO, not a release worktree"
+  if git -C "$DEST" symbolic-ref -q HEAD >/dev/null 2>&1; then
+    die "$DEST is on branch $(git -C "$DEST" symbolic-ref --short HEAD); a release worktree is detached"
+  fi
   [ -z "$(git -C "$DEST" status --porcelain 2>/dev/null)" ] || die "$DEST has local changes; commit or discard them first"
   CUR=$(git -C "$DEST" rev-parse HEAD)
   CUR_DESC=$(git -C "$DEST" describe --tags --exact-match HEAD 2>/dev/null || echo "${CUR%"${CUR#????????????}"}")
@@ -103,7 +113,7 @@ link() {
     echo "  link  $path: $now -> $target"
     do_or_say rm "$path"
   elif [ -e "$path" ]; then
-    echo "  move  $path is a real directory; it is kept as $path.pre-release-$STAMP"
+    echo "  move  $path is not a symlink; it is kept as $path.pre-release-$STAMP"
     do_or_say mv "$path" "$path.pre-release-$STAMP"
   else
     echo "  link  $path (new) -> $target"

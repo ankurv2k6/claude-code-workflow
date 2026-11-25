@@ -98,15 +98,53 @@ export const PLACEHOLDERS = ['files', 'base', 'name', 'url', 'port', 'lane', 'se
 /** Placeholders named in a command string. */
 export const placeholdersIn = (cmd) => [...String(cmd).matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]);
 
-/** Fill {placeholders}; returns { cmd, missing } where missing lists unfilled names. */
-export function fill(cmd, values) {
+/** One shell word: a plain value is kept as is, anything else is single-quoted. */
+export const shellWord = (v) => {
+  const s = String(v);
+  return /^[A-Za-z0-9_.\/:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+};
+
+/**
+ * Fill {placeholders}; returns { cmd, missing } where missing lists unfilled names.
+ * Values are shell-quoted (quote: false for plain names such as test_db.name_pattern), so a
+ * value can never inject shell: {files} is split on whitespace (or given as an array) and each
+ * path becomes one quoted word; every other value becomes one quoted word.
+ */
+export function fill(cmd, values, { quote = true } = {}) {
   const missing = [];
+  const word = (k, v) => {
+    if (!quote) return String(v);
+    const parts = Array.isArray(v) ? v.map(String) : k === 'files' ? String(v).split(/\s+/).filter(Boolean) : [String(v)];
+    return parts.map(shellWord).join(' ');
+  };
   const out = String(cmd).replace(/\{([a-z_]+)\}/g, (m, k) => {
-    if (values[k] !== undefined && values[k] !== null && values[k] !== '') return String(values[k]);
+    const v = values[k];
+    if (v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)) return word(k, v);
     if (PLACEHOLDERS.includes(k)) missing.push(k);
     return m;
   });
   return { cmd: out, missing: [...new Set(missing)] };
+}
+
+/** Placeholders that sit inside '…' or "…" in a command; fill() quotes values itself. */
+export function quotedPlaceholders(cmd) {
+  const s = String(cmd);
+  const found = [];
+  let q = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q !== "'" && c === '\\') {
+      i++;
+      continue;
+    }
+    if (!q && (c === "'" || c === '"')) q = c;
+    else if (q && c === q) q = '';
+    else if (q && c === '{') {
+      const m = s.slice(i).match(/^\{([a-z_]+)\}/);
+      if (m) found.push(m[1]);
+    }
+  }
+  return [...new Set(found)];
 }
 
 /** Run a shell command with the profile's shell prefix. */

@@ -80,3 +80,21 @@ test('release.sh never deletes a real directory, and refuses a dirty release or 
   assert.equal(rel(home, 'v9.9.9', '--repo', clone).code, 1);
   assert.equal(rel(home).code, 2);
 });
+
+test('release.sh refuses a destination that is not a detached, linked release worktree', (t) => {
+  const { d, home, clone } = fixture(t);
+  const head = () => sh(clone, 'git symbolic-ref --short HEAD', home);
+  const before = head();
+  for (const dest of [clone, join(clone, '.claude')]) {
+    const r = rel(home, 'v2.0.0', '--repo', clone, '--dest', dest, '--apply');
+    assert.equal(r.code, 1, `${dest}: ${r.out}${r.err}`);
+    assert.match(r.err, /main working tree|inside the checkout/);
+  }
+  const lane = join(d, 'lane-wt');
+  sh(clone, `git worktree add -q -b lane/x ${lane}`, home);
+  const r = rel(home, 'v2.0.0', '--repo', clone, '--dest', lane, '--apply');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /on branch lane\/x/);
+  assert.equal(head(), before, 'the main checkout never left its branch');
+  assert.equal(sh(lane, 'git symbolic-ref --short HEAD', home), 'lane/x');
+});

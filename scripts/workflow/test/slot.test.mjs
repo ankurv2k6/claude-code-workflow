@@ -26,13 +26,30 @@ test('two callers on a 1-slot job: the second waits for the first', async (t) =>
 test('two slots let two callers run at once', async (t) => {
   const d = tmp(t);
   const lock = join(d, 'locks');
-  const start = Date.now();
-  const a = runAsync('slot.sh', ['job', '2', '--lock-dir', lock, '--poll', '0.1', '--', 'sleep', '1']);
-  const b = runAsync('slot.sh', ['job', '2', '--lock-dir', lock, '--poll', '0.1', '--', 'sleep', '1']);
+  // A barrier, not a stopwatch: each caller exits 0 only if it sees both inside their slots at
+  // once, so the test cannot fail on a slow machine and cannot pass on serial execution.
+  const body = (me) => `touch ${d}/${me}; i=0; while [ $i -lt 100 ]; do [ -e ${d}/a ] && [ -e ${d}/b ] && exit 0; sleep 0.1; i=$((i+1)); done; exit 9`;
+  const a = runAsync('slot.sh', ['job', '2', '--lock-dir', lock, '--poll', '0.1', '--timeout', '5', '--', '/bin/bash', '-c', body('a')]);
+  const b = runAsync('slot.sh', ['job', '2', '--lock-dir', lock, '--poll', '0.1', '--timeout', '5', '--', '/bin/bash', '-c', body('b')]);
   const [ra, rb] = await Promise.all([a.done, b.done]);
-  assert.equal(ra.code + rb.code, 0);
-  assert.ok(Date.now() - start < 1900, 'ran in parallel');
+  assert.equal(ra.code, 0, ra.err);
+  assert.equal(rb.code, 0, rb.err);
   assert.doesNotMatch(ra.err + rb.err, /waiting/);
+});
+
+test('three callers on two slots: never more than two at once, all finish', async (t) => {
+  const d = tmp(t);
+  const lock = join(d, 'locks');
+  const log = join(d, 'log');
+  const body = `echo s >> ${log}; sleep 0.5; echo e >> ${log}`;
+  const runs = [1, 2, 3].map(() => runAsync('slot.sh', ['job', '2', '--lock-dir', lock, '--poll', '0.05', '--timeout', '30', '--', '/bin/bash', '-c', body]));
+  const rs = await Promise.all(runs.map((r) => r.done));
+  assert.deepEqual(rs.map((r) => r.code), [0, 0, 0]);
+  let c = 0;
+  let max = 0;
+  for (const l of readFileSync(log, 'utf8').trim().split('\n')) max = Math.max(max, (c += l === 's' ? 1 : -1));
+  assert.equal(max, 2);
+  assert.match(rs.map((r) => r.err).join(''), /busy; waiting/);
 });
 
 test('a stale lock whose pid is dead is reclaimed', (t) => {

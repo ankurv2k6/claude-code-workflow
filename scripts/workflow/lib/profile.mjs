@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { readJson, placeholdersIn, PLACEHOLDERS } from './common.mjs';
+import { readJson, placeholdersIn, quotedPlaceholders, PLACEHOLDERS } from './common.mjs';
 import { validate } from './schema.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,8 @@ export function semanticErrors(p) {
     for (const ph of placeholdersIn(c))
       if (!PLACEHOLDERS.includes(ph) && ph !== 'host')
         errs.push(`${path}: unknown placeholder {${ph}} (known: ${PLACEHOLDERS.join(', ')})`);
+    for (const ph of quotedPlaceholders(c))
+      errs.push(`${path}: placeholder {${ph}} is inside quotes; leave it bare, the scripts shell-quote every value`);
   }
   const r = p.ports?.range;
   if (Array.isArray(r) && r.length === 2 && r[0] > r[1]) errs.push('$.ports.range: start is above end');
