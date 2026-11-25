@@ -32,7 +32,8 @@ its row names one), and its brief names the row of the table below that it uses.
 | Design foundation (shared sheets, chrome, fixtures) | high | session default | agent, before any screen agent | 30 lines |
 | Design area: wireframes for 3–6 screens (makes each screen's Show / On demand / Omit decisions) | high | session default | background agent | 15 lines |
 | Design area: mockups for 3–6 screens (renders wireframes whose decisions are already made) | medium | doc-only: Sonnet if `agents.overrides` allows | background agent | 15 lines |
-| Spec verifier (blueprint or design set) | high | `agents.verifier_model` | 2 agents split by file ownership, never more on the same files | 30 lines |
+| Spec verifier, blueprint set | high | `agents.verifier_model` | 1 agent, one round (a second only to check a CRITICAL fix); a set too big for one context splits central vs module files, still one round | 30 lines |
+| Spec verifier, design set | high | `agents.verifier_model` | 2 agents split by file ownership, never more on the same files | 30 lines |
 | Accessibility check (never the agent that chose the colours) | medium | `agents.verifier_model` | agent | 20 lines |
 | Code search across many files | medium | the agent type's default | Explore agent | the conclusion only |
 | Structural check: file exists, counts, hashes, links, journal order, map coverage | — | — | a script; read the exit code | — |

@@ -108,6 +108,9 @@ order; the first red stops the tier and is recorded.
 - **A gate with `heavy` takes a slot:** `$WORKFLOW_HOME/scripts/workflow/slot.sh <slot> <slots>
   --lock-dir <lock_dir> -- <cmd>`. Without the script, the orchestrator runs heavy gates one at a time.
 - **`smoke: true`** marks a gate safe for the scaffold's smoke run (fast, read-only). Only those run there.
+- **Conventional gate names** that skills look for when present (absent means the v1 step):
+  `reach-walk` (walks the permission or reach tables; `/blueprint` verify and the contracts verifier run it),
+  `caller-list` (lists the callers of changed response shapes; `/blueprint` and merges run it).
 - **A blueprint or brief names gates, never raw commands.** `/blueprint` dry-runs each name it uses.
 
 ## Where a lesson belongs

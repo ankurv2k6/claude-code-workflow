@@ -448,7 +448,7 @@ State machine: `OPEN → BLOCKED → READY_TO_REOPEN → IN_PROGRESS → RESOLVE
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| `/design-ui` | Generate wireframes (Markdown + ASCII) from a plan under a binding declutter brief (Show / On demand / Omit). Discovers and follows the project's existing design system. Foundation agent first, then one agent per area of 3–6 screens, then a consolidation pass. | `[plan-path]`<br>`--with-mockups` (HTML/CSS/JS prototypes)<br>`--mockups-only`, `--module <name>`<br>`--update`, `--verify`, `--sync-blueprints`, `--guide`<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if `--with-mockups`) |
+| `/design-ui` | Generate wireframes (Markdown + ASCII) from a plan under a binding declutter brief (Show / On demand / Omit). Discovers and follows the project's existing design system. Foundation agent first, then one agent per area of 3–6 screens, then a consolidation pass. | `[plan-path]`<br>`--with-mockups` (HTML/CSS/JS prototypes)<br>`--mockups-only`, `--module <name>`<br>`--update`, `--verify`, `--guide`<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if `--with-mockups`) |
 
 UI parity is part of every UI task in `/implement-plan` and of verification: real-browser screenshot pairs of mockup and app in each state (`_shared-ui-parity.md`). A visible structure, copy or state difference is HIGH, so parity is gated, not optional.
 

@@ -85,7 +85,7 @@ For multi-module batch execution:
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| **`/design-ui`** | Generate wireframes (Markdown + ASCII) from plan under a binding declutter brief (Show / On demand / Omit). Foundation agent first, then one agent per area of 3–6 screens, then consolidation. | `[plan-path]`<br>`--with-mockups` (add HTML mockups)<br>`--mockups-only` (mockups from wireframes)<br>`--module <name>` (single module)<br>`--update` (update from revised plan)<br>`--verify` (audit + auto-fix)<br>`--sync-blueprints` (sync UI specs to blueprints)<br>`--guide` (show input guide)<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if --with-mockups) |
+| **`/design-ui`** | Generate wireframes (Markdown + ASCII) from plan under a binding declutter brief (Show / On demand / Omit). Foundation agent first, then one agent per area of 3–6 screens, then consolidation. | `[plan-path]`<br>`--with-mockups` (add HTML mockups)<br>`--mockups-only` (mockups from wireframes)<br>`--module <name>` (single module)<br>`--update` (update from revised plan)<br>`--verify` (audit + auto-fix)<br>`--guide` (show input guide)<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if --with-mockups) |
 
 ---
 
