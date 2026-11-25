@@ -10,9 +10,10 @@ Usage:
   node profile-diff.mjs <old.json> <new.json> [--summary | --json]
 
 Each change gets one class:
-  addition        a new gate in a tier, a new gate in the registry, a new invariant suite,
-                  a new risk route
-  command-change  a commands.* entry or shell_prefix added or changed, a gate's cmd changed
+  addition        an existing gate named in a tier, a new invariant suite, a new risk route
+  command-change  a commands.* entry or shell_prefix added or changed, a gate's cmd changed,
+                  a new gate in the registry (a new cmd is new code execution), and a tier
+                  entry naming such a new gate
   removal         anything taken away (a tier gate, a gate, a suite, a route, a command, a key)
   test-db-change  anything under test_db
   limit-change    limits.*, agents.max_concurrent, heavy_jobs.*.slots
@@ -58,7 +59,7 @@ export function diffProfiles(rawA, rawB) {
     }
     switch (k) {
       case 'tiers':
-        diffTiers(o || {}, n || {}, add);
+        diffTiers(o || {}, n || {}, add, a?.gates || {});
         break;
       case 'gates':
         diffGates(o || {}, n || {}, add);
@@ -129,12 +130,13 @@ function diffList(path, o, n, add) {
   o.forEach((x, i) => !ns.includes(os[i]) && add('removal', path, x, undefined));
 }
 
-function diffTiers(o, n, add) {
+function diffTiers(o, n, add, oldGates) {
   for (const t of new Set([...Object.keys(o), ...Object.keys(n)])) {
     if (same(o[t], n[t])) continue;
     const ol = Array.isArray(o[t]) ? o[t] : [];
     const nl = Array.isArray(n[t]) ? n[t] : [];
-    for (const g of nl) if (!ol.includes(g)) add('addition', `tiers.${t}`, undefined, g);
+    // Only a gate the old registry already had is a mechanical addition; a new gate brings a new cmd.
+    for (const g of nl) if (!ol.includes(g)) add(g in oldGates ? 'addition' : 'command-change', `tiers.${t}`, undefined, g);
     for (const g of ol) if (!nl.includes(g)) add('removal', `tiers.${t}`, g, undefined);
     const common = nl.filter((g) => ol.includes(g));
     const oc = ol.filter((g) => nl.includes(g));
@@ -145,7 +147,7 @@ function diffTiers(o, n, add) {
 function diffGates(o, n, add) {
   for (const g of new Set([...Object.keys(o), ...Object.keys(n)])) {
     if (same(o[g], n[g])) continue;
-    if (o[g] === undefined) add('addition', `gates.${g}`, undefined, n[g]);
+    if (o[g] === undefined) add('command-change', `gates.${g}`, undefined, n[g]);
     else if (n[g] === undefined) add('removal', `gates.${g}`, o[g], undefined);
     else
       for (const f of new Set([...Object.keys(o[g]), ...Object.keys(n[g])])) {

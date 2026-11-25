@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp, run, write, EXAMPLE_PROFILE } from './helpers.mjs';
 import { diffProfiles } from '../profile-diff.mjs';
 import { validate } from '../lib/schema.mjs';
+import { checkProfile } from '../lib/profile.mjs';
+
+const schema = () => JSON.parse(readFileSync(join(EXAMPLE_PROFILE, '..', 'workflow-profile.schema.json'), 'utf8'));
 
 const example = () => JSON.parse(readFileSync(EXAMPLE_PROFILE, 'utf8'));
 
@@ -93,22 +96,36 @@ test('the validator covers every keyword the schema description lists', () => {
 
 const classes = (a, b) => diffProfiles(a, b).changes.map((c) => `${c.class} ${c.path}`);
 
-test('profile-diff: additions (tier gate, registry gate, invariant suite, risk route) are auto-applicable', () => {
+test('profile-diff: additions (existing gate in a tier, invariant suite, risk route) are auto-applicable', () => {
+  const a = example();
+  const b = example();
+  b.tiers.lane_end.push('migration-journal');
+  b.invariant_suites.push('tests/more-invariants');
+  b.risk_routing.push({ paths: ['**/billing/**'], verifier: 'security-engineer', reason: 'money' });
+  b.provenance.push({ path: 'tiers.lane_end', source: 'context/batch-report-y.md', date: '2026-11-26', change: 'added migration-journal' });
+  b.updated = '2026-11-26';
+  b.notes = 'changed prose';
+  b.gates.typecheck.notes = 'new note';
+  const d = diffProfiles(a, b);
+  assert.deepEqual(d.changes.map((c) => c.class), ['addition', 'addition', 'addition']);
+  assert.equal(d.only_additions, true, 'provenance, updated and notes never block the additions path');
+  assert.equal(d.owner_items, 0);
+  assert.deepEqual(d.ignored.sort(), ['notes', 'provenance', 'updated']);
+});
+
+test('profile-diff: a new registry gate is a new cmd, so an owner item, and so is a tier naming it', () => {
   const a = example();
   const b = example();
   b.gates['new-check'] = { cmd: 'node scripts/new-check.mjs', kind: 'check' };
   b.tiers.merge.push('new-check');
   b.invariant_suites.push('tests/more-invariants');
-  b.risk_routing.push({ paths: ['**/billing/**'], verifier: 'security-engineer', reason: 'money' });
-  b.provenance.push({ path: 'tiers.merge', source: 'context/batch-report-y.md', date: '2026-11-26', change: 'added new-check' });
-  b.updated = '2026-11-26';
-  b.notes = 'changed prose';
-  b.gates.typecheck.notes = 'new note';
   const d = diffProfiles(a, b);
-  assert.deepEqual(d.changes.map((c) => c.class), ['addition', 'addition', 'addition', 'addition']);
-  assert.equal(d.only_additions, true, 'provenance, updated and notes never block the additions path');
-  assert.equal(d.owner_items, 0);
-  assert.deepEqual(d.ignored.sort(), ['notes', 'provenance', 'updated']);
+  assert.deepEqual(
+    d.changes.map((c) => `${c.class} ${c.path}`).sort(),
+    ['addition invariant_suites', 'command-change gates.new-check', 'command-change tiers.merge'],
+  );
+  assert.equal(d.only_additions, false, 'any new cmd needs the owner');
+  assert.equal(d.owner_items, 2);
 });
 
 test('profile-diff: each other change class', () => {
@@ -157,4 +174,34 @@ test('profile-diff CLI prints JSON on stdout and a summary', (t) => {
   const s = run('profile-diff.mjs', [pa, pb, '--summary']);
   assert.match(s.out, /auto\s+addition\s+tiers\.lane_end/);
   assert.equal(run('profile-diff.mjs', [pa]).code, 2);
+});
+
+test('profile-check --smoke shell-quotes placeholder values, so a file name cannot inject shell', (t) => {
+  const d = tmp(t);
+  const marker = join(d, 'pwned');
+  const p = example();
+  p.shell_prefix = 'export SMOKE_PREFIX=1;';
+  p.gates = { echo: { cmd: 'printf "<%s>" {lane}', kind: 'check', smoke: true } };
+  p.tiers = {};
+  p.commands = { test_task: 'printf "<%s>" {files}; test "$SMOKE_PREFIX" = 1', test_lane_end: 'printf "<%s>" {base}' };
+  const f = write(join(d, '.claude', 'workflow-profile.json'), p);
+  const r = run('profile-check.mjs', [
+    '--profile', f, '--smoke', '--json',
+    '--files', `a.ts b;touch ${marker}`, '--files', `$(touch ${marker})`,
+    '--base', `x\`touch ${marker}\``, '--lane', `a'; touch ${marker}; '`,
+  ]);
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.ok(!existsSync(marker), 'no placeholder value ran as shell');
+  const s = Object.fromEntries(JSON.parse(r.out).smoke.map((x) => [x.id, x]));
+  assert.equal(s['commands.test_task'].status, 'pass', 'the prefix still applies');
+  assert.match(s['commands.test_task'].cmd, /^printf "<%s>" a\.ts 'b;touch' \S+ '\$\(touch' '[^']*\)'; test/);
+});
+
+test('profile-check rejects a placeholder inside quotes', () => {
+  const p = example();
+  p.commands.test_task = 'node scripts/test-select.mjs --files "{files}"';
+  p.test_db.bootstrap = "TEST_DATABASE_URL='{url}' pnpm test:bootstrap";
+  const errs = checkProfile(p, schema());
+  assert.ok(errs.some((e) => /commands\.test_task: placeholder \{files\} is inside quotes/.test(e)), errs.join('\n'));
+  assert.ok(errs.some((e) => /test_db\.bootstrap: placeholder \{url\} is inside quotes/.test(e)), errs.join('\n'));
 });
