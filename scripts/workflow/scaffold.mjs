@@ -119,7 +119,7 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
     };
     const wantDb = l.test_db ?? !!db?.create;
     if (wantDb && db && !skipDb) {
-      const name = fill(db.name_pattern || '{set}_{lane}_test', { set: laneToken(set), lane: laneToken(l.lane) }).cmd;
+      const name = fill(db.name_pattern || '{set}_{lane}_test', { set: laneToken(set), lane: laneToken(l.lane) }, { quote: false }).cmd;
       out.db = { name, url: dbUrl(db, name) };
     }
     return out;

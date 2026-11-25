@@ -14,11 +14,13 @@ Usage:
 
 Checks the profile against the schema (--schema, else .claude/templates/
 workflow-profile.schema.json in this checkout, else in $WORKFLOW_HOME), then cross-field rules: every tier names a known gate, every "heavy" names a heavy_jobs slot,
-placeholders are known, test_db.host is in allow_hosts.
+placeholders are known and bare (never inside quotes), test_db.host is in allow_hosts.
 
 --smoke runs every gate with "smoke": true and every commands.* entry, each through
 "bash -c '<shell_prefix> <cmd>'" in the project root, and reports each exit code. Placeholders
-come from flags; an entry whose placeholders are not all given is reported as skipped.
+come from flags and are shell-quoted, so a value cannot inject shell: --files is split on
+whitespace (or repeated) and each path becomes one quoted word. An entry whose placeholders are
+not all given is reported as skipped.
 
 Placeholder flags: --files --base --name --url --port --lane --set
 Options:
@@ -42,7 +44,7 @@ export function main(argv) {
       json: { type: 'boolean' },
       only: { type: 'string', multiple: true },
       timeout: { type: 'string' },
-      ...Object.fromEntries(PH.map((k) => [k, { type: 'string' }])),
+      ...Object.fromEntries(PH.map((k) => [k, k === 'files' ? { type: 'string', multiple: true } : { type: 'string' }])),
     },
     USAGE,
     argv,
@@ -62,6 +64,7 @@ export function main(argv) {
 
   if (flags.smoke && result.valid) {
     const values = Object.fromEntries(PH.map((k) => [k, flags[k]]));
+    if (values.files) values.files = values.files.flatMap((f) => f.split(/\s+/)).filter(Boolean);
     let entries = smokeEntries(profile);
     if (flags.only?.length) entries = entries.filter((e) => flags.only.includes(e.id));
     for (const e of entries) {
