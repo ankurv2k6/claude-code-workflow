@@ -25,6 +25,9 @@ project facts in a per-project profile, and pins every batch to a workflow versi
   - points `~/.claude/commands` and `~/.claude/templates` at it;
   - without `--apply` it only prints what it would do. Rollback is the same command with the previous tag.
   - It is never run by a lane. The owner runs it at switch-over.
+- **Where skills find the generic scripts:** `$WORKFLOW_HOME/scripts/workflow/<script>`. `WORKFLOW_HOME` defaults to
+  `~/.claude/workflow-release`, the pinned checkout. For tests before a release, set it to a v2 worktree. Skills must
+  say what to do when a script is absent (the v1 step).
 - The task-list header gains `workflow_version: <VERSION>`.
   - On `--resume`, a task list whose `workflow_version` differs from the installed `VERSION` follows its own version's
     text, read with `git -C ~/claudeworkflow show v<version>:.claude/commands/<file>`.
