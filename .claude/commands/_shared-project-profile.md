@@ -18,10 +18,12 @@ project's command, gate, port, test DB or limit; it reads them from the profile.
 - **Path:** `<project>/.claude/workflow-profile.json`, committed in the project. JSON only.
 - **Schema:** `~/.claude/templates/workflow-profile.schema.json`. Example:
   `~/.claude/templates/workflow-profile.example.json`.
-- **Check:** `node $WORKFLOW_HOME/scripts/workflow/profile-check.mjs .claude/workflow-profile.json`.
-- **Scripts:** `$WORKFLOW_HOME/scripts/workflow/<script>`. `WORKFLOW_HOME` defaults to
-  `~/.claude/workflow-release` (the pinned release); set it to a worktree to test unreleased scripts.
-  Each skill says what to do by hand when a script is absent.
+- **Scripts:** `$WH/scripts/workflow/<script>`, where `WH="${WORKFLOW_HOME:-$HOME/.claude/workflow-release}"`
+  (the pinned release; set `WORKFLOW_HOME` to a worktree to test unreleased scripts). Always expand the
+  default: a bare `$WORKFLOW_HOME` that is unset points at `/scripts/…`, and the step silently falls back to
+  "script absent". Each skill says what to do by hand when a script is absent.
+- **Check:** `node "$WH/scripts/workflow/profile-check.mjs" --profile .claude/workflow-profile.json` (the
+  path goes in `--profile`; a bare positional path is ignored).
 
 ## Keys
 
@@ -105,8 +107,10 @@ order; the first red stops the tier and is recorded.
 
 - **Every tier entry names a gate in the registry, and every `heavy` names a `heavy_jobs` slot.** A
   skill that meets an unknown name stops and raises it.
-- **A gate with `heavy` takes a slot:** `$WORKFLOW_HOME/scripts/workflow/slot.sh <slot> <slots>
-  --lock-dir <lock_dir> -- <cmd>`. Without the script, the orchestrator runs heavy gates one at a time.
+- **A gate with `heavy` takes a slot:** `"$WH/scripts/workflow/slot.sh" <slot> <heavy_jobs.<slot>.slots>
+  --lock-dir <heavy_jobs.<slot>.lock_dir> -- <cmd>`. Exit 75 means the wait timed out (default 7200 s): the
+  gate did not run, which is neither green nor red; re-queue it. Without the script, the orchestrator runs
+  heavy gates one at a time.
 - **`smoke: true`** marks a gate safe for the scaffold's smoke run (fast, read-only). Only those run there.
 - **Conventional gate names** that skills look for when present (absent means the v1 step):
   `reach-walk` (walks the permission or reach tables; `/blueprint` verify and the contracts verifier run it),
@@ -144,8 +148,15 @@ projects with profiles; promotion across projects waits until there are two.)
 
 - **Nothing else is ever auto-applied**, and a standalone run (not the orchestrator's last step) applies
   nothing: it writes the diff and lists every change as an Owner item.
-- **Applying:** write the profile with only the additions; re-run `profile-diff.mjs` and confirm every
-  change is `addition`; then add one provenance row per change and set `updated`; run
+- **Deciding:** `profile-diff.mjs` exits 0 whenever it has compared; never read its exit code as the
+  answer. Read its JSON: `only_additions: true` (and `owner_items: 0`) is the only state that allows an
+  apply.
+- **Applying:** write the profile with only the additions; re-run `profile-diff.mjs` and confirm
+  `only_additions` is `true`; then **smoke-run each added gate** with the `shell_prefix` (so the shell is
+  stripped of credentials as the project requires): `profile-check.mjs --profile <file> --smoke --only
+  gates.<name>` for a gate marked `smoke: true`, and for any other gate the static checks only (placeholders
+  fillable, every script and path it names exists), never a run. An added gate that fails is taken out
+  again and becomes an Owner item. Then add one provenance row per change and set `updated`; run
   `profile-check.mjs`; commit `chore(workflow): profile additions from <set>`.
 - **Without `profile-diff.mjs`:** apply nothing. List each change as an Owner item with the old and new
   value.

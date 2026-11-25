@@ -36,10 +36,12 @@ Read each source once. A missing one is recorded as "not found", not guessed.
 | Batch report | `context/batch-report-<set>.md` | final gate results, reds at cut end, integration fixes |
 | Verifier findings | the findings files the task list's Agents rows and notes point to | findings by module, and which gate could have caught each |
 | Build report | `<logs_dir>/build-report-<set>.md` | tokens, cost, active minutes and maximum context per agent and role |
-| Script drift | the profile's commands against what the briefs and Decision log ran; project copies of generic scripts against `$WORKFLOW_HOME/scripts/workflow/` (`diff -q`) | commands changed by hand mid-batch, local forks of generic scripts |
+| Script drift | the profile's commands against what the briefs and Decision log ran; project copies of generic scripts against `$WH/scripts/workflow/` (`diff -q`; `WH` per `_shared-project-profile.md`) | commands changed by hand mid-batch, local forks of generic scripts |
 
-No build report yet: run `node $WORKFLOW_HOME/scripts/workflow/build-report.mjs --help`, then run it
-with its output in `<logs_dir>/build-report-<set>.md`, and read only that file.
+No build report yet: run `node "$WH/scripts/workflow/build-report.mjs" --session <orchestrator session id>
+--set <set>` (id unknown: `--all --since <batch start date>`, which also counts any other session of the
+project in that window; say so in the sources line), which writes `<logs_dir>/build-report-<set>.md`, and read only that file. Cost appears only
+with `--prices <file>`; without a price table, report tokens and minutes and write "cost: no price table".
 
 ## Step 2: Find the lessons
 
@@ -65,15 +67,17 @@ For the profile-class lessons:
 
 1. Copy `.claude/workflow-profile.json` to a scratch file and make each change there. Leave
    `provenance` and `updated` alone until the apply, so the diff shows only the real changes.
-2. `node $WORKFLOW_HOME/scripts/workflow/profile-diff.mjs .claude/workflow-profile.json <scratch file>`,
-   with its JSON saved to `<logs_dir>/workflow-sync-<set>-diff.json`.
+2. `node "$WH/scripts/workflow/profile-diff.mjs" .claude/workflow-profile.json <scratch file> --json`,
+   saved to `<logs_dir>/workflow-sync-<set>-diff.json`. It exits 0 whenever it has compared: decide from
+   the JSON's `only_additions` and `owner_items`, never from the exit code.
 3. **No profile in the project:** propose one from `~/.claude/templates/workflow-profile.example.json`
    as a single Owner item. Apply nothing.
 
 ## Step 5: Apply by risk
 
 - With `--apply-additions`: apply the `addition` changes only, as `_shared-project-profile.md` §Apply by
-  risk says (re-diff, check, provenance, `updated`, one commit).
+  risk says (re-diff until `only_additions` is `true`, smoke-run each added gate, check, provenance,
+  `updated`, one commit). An added gate that fails its smoke run is not applied: it becomes an Owner item.
 - Every other change, and every change on a run without the flag, becomes an Owner item naming the
   key, the old and new value, and the lesson.
 

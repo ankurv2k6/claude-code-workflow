@@ -27,7 +27,9 @@ Agents per `_shared-effort-budget.md`, background, effort high, completion by no
 | **Verifier** (one) | findings only | every file is written |
 | **Orchestrator** (you) | nothing in `context/blueprints/` or `context/implementation/` | — |
 
-- **One writer per file.** No second agent rewrites a file another wrote; a finding goes back to that file's
+- **One writer per file**, with one split: in a UI module's blueprint the designer owns §4 and its Design
+  Sync table, and the module writer owns the rest (`design-ui.md` Phase 6). No second agent rewrites a file
+  (or section) another wrote; a finding goes back to that file's
   writer (resumed with `SendMessage` while it is addressable) or to one fix agent with the findings.
 - **The orchestrator never writes blueprint files.** It launches, reads hand-backs, runs the scripts in Phase 3B
   and 7B, and records the result.
@@ -269,8 +271,10 @@ Every gate or command the blueprint names (module §7A, §7E, §12, master S13, 
 Stage Gate Status) is dry-run now, not first at the batch's final.
 
 - **With a profile:** each name must exist in the gate registry (`gates`), and each tier entry the blueprint
-  cites must exist in `tiers.*`. Run `node $WORKFLOW_HOME/scripts/workflow/profile-check.mjs
-  .claude/workflow-profile.json --smoke` for the `smoke: true` gates. For a gate that is not smoke-safe, check
+  cites must exist in `tiers.*`. Run `node "$WH/scripts/workflow/profile-check.mjs" --profile
+  .claude/workflow-profile.json --smoke --only gates.<name> …` (`WH` per `_shared-project-profile.md`),
+  one `--only` per `smoke: true` gate the blueprint names. Never `--smoke` without `--only`: it also runs
+  every `commands.*` entry, the full test run included. For a gate that is not smoke-safe, check
   without running it: placeholders fillable, every script and path it names exists, every env var it reads is
   set or documented. Script absent: do the same checks by hand.
 - **Without a profile:** dry-run each command as written: the same existence checks, and the cheap static ones

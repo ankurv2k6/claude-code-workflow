@@ -42,7 +42,9 @@ node "${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/scripts/workflow/watchdog
 ```
 
 It checks every 5 minutes. **Exit 3:** a lane is stalled; its report names the lane. Act (below), then
-restart the watchdog. **Exit 0:** no lane is running; restart it when the next lane launches.
+restart the watchdog. **Exit 0:** no lane is running; restart it when the next lane launches. **Exit 2:**
+a usage error; fix the call. (Exit 4 comes only with `--once`, a single check: lanes are running and none
+is stalled. The background loop never uses `--once`.)
 
 **Script absent:** at every notification, check each running lane's last commit time, progress note and
 newest log yourself (`git -C <wt> log -1 --format=%cr`, `ls -lt <wt>/<logs_dir> | head -2`), and skip slot
