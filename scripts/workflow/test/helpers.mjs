@@ -33,7 +33,7 @@ export function env(home, extra = {}) {
 
 export function run(script, args, { cwd, home, extraEnv, input } = {}) {
   const file = join(SCRIPTS, script);
-  const cmd = script.endsWith('.sh') ? '/bin/bash' : process.execPath;
+  const cmd = script.endsWith('.sh') ? 'bash' : process.execPath;
   const r = spawnSync(cmd, [file, ...args], {
     cwd: cwd || SCRIPTS,
     env: env(home || tmpdir(), extraEnv),
@@ -45,7 +45,7 @@ export function run(script, args, { cwd, home, extraEnv, input } = {}) {
 
 export function runAsync(script, args, { cwd, home, extraEnv } = {}) {
   const file = join(SCRIPTS, script);
-  const cmd = script.endsWith('.sh') ? '/bin/bash' : process.execPath;
+  const cmd = script.endsWith('.sh') ? 'bash' : process.execPath;
   const child = spawn(cmd, [file, ...args], { cwd: cwd || SCRIPTS, env: env(home || tmpdir(), extraEnv) });
   let out = '';
   let err = '';
@@ -56,7 +56,7 @@ export function runAsync(script, args, { cwd, home, extraEnv } = {}) {
 }
 
 export function sh(cwd, cmd, home, extraEnv = {}) {
-  const r = spawnSync('/bin/bash', ['-c', cmd], { cwd, env: env(home || cwd, extraEnv), encoding: 'utf8' });
+  const r = spawnSync('bash', ['-c', cmd], { cwd, env: env(home || cwd, extraEnv), encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`${cmd}\n${r.stderr}`);
   return r.stdout.trim();
 }

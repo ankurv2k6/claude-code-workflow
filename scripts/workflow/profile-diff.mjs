@@ -12,8 +12,10 @@ Usage:
 Each change gets one class:
   addition        an existing gate named in a tier, a new invariant suite, a new risk route
   command-change  a commands.* entry or shell_prefix added or changed, a gate's cmd changed,
-                  a new gate in the registry (a new cmd is new code execution), and a tier
-                  entry naming such a new gate
+                  a new gate in the registry (a new cmd is new code execution; a new agent gate
+                  is a new verdict), and a tier entry naming such a new gate; an agent gate's
+                  verifier or asks changed, a kind changed to or from "agent"; anything under
+                  merge (renumber, check)
   removal         anything taken away (a tier gate, a gate, a suite, a route, a command, a key)
   test-db-change  anything under test_db
   limit-change    limits.*, agents.max_concurrent, heavy_jobs.*.slots
@@ -72,6 +74,9 @@ export function diffProfiles(rawA, rawB) {
         break;
       case 'commands':
         diffMap('commands', o || {}, n || {}, add, () => 'command-change');
+        break;
+      case 'merge':
+        diffMap('merge', o || {}, n || {}, add, () => 'command-change');
         break;
       case 'shell_prefix':
         add(n === undefined ? 'removal' : 'command-change', k, o, n);
@@ -152,7 +157,8 @@ function diffGates(o, n, add) {
     else
       for (const f of new Set([...Object.keys(o[g]), ...Object.keys(n[g])])) {
         if (same(o[g][f], n[g][f])) continue;
-        const cls = n[g][f] === undefined ? 'removal' : f === 'cmd' ? 'command-change' : 'other';
+        const agentKind = f === 'kind' && (o[g][f] === 'agent' || n[g][f] === 'agent');
+        const cls = n[g][f] === undefined ? 'removal' : ['cmd', 'verifier', 'asks'].includes(f) || agentKind ? 'command-change' : 'other';
         add(cls, `gates.${g}.${f}`, o[g][f], n[g][f]);
       }
   }

@@ -150,7 +150,7 @@ export function quotedPlaceholders(cmd) {
 /** Run a shell command with the profile's shell prefix. */
 export function runShell(cmd, { prefix = '', cwd, timeoutSec = 600, env } = {}) {
   const full = prefix ? `${prefix.trim()} ${cmd}` : cmd;
-  const r = spawnSync('/bin/bash', ['-c', full], {
+  const r = spawnSync('bash', ['-c', full], {
     cwd,
     env: env || process.env,
     encoding: 'utf8',

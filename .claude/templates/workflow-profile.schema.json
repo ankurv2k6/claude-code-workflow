@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "workflow-profile.schema.json",
   "title": "Workflow project profile",
-  "description": "A project's facts for the workflow commands: commands, gates, tiers, test DBs, limits. Path: <project>/.claude/workflow-profile.json. Uses only the draft-07 keywords type, properties, required, additionalProperties, items, enum, minimum, minLength, minItems, maxItems and pattern, so a dependency-free checker can validate it. Protocol: ~/.claude/commands/_shared-project-profile.md.",
+  "description": "A project's facts for the workflow commands: commands, gates, tiers, test DBs, limits. Path: <project>/.claude/workflow-profile.json. Uses only the draft-07 keywords type, properties, required, additionalProperties, items, enum, minimum, minLength, minItems, maxItems and pattern, so a dependency-free checker can validate it. Cross-field rules (an agent gate needs verifier, other gates need cmd; no tier runs commands.test_full) are checked by profile-check.mjs. Protocol: ~/.claude/commands/_shared-project-profile.md.",
   "type": "object",
   "required": ["version", "project", "updated"],
   "additionalProperties": false,
@@ -19,7 +19,11 @@
         "invariants": { "type": "string" },
         "guardrails": { "type": "string" },
         "process": { "type": "string" },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "release_branch": {
+          "type": "string",
+          "description": "The release branch the integration base must contain; /implement-batch checks it before each wave of launches."
+        }
       }
     },
     "shell_prefix": { "type": "string", "description": "Prepended to every command and gate a skill runs." },
@@ -34,35 +38,54 @@
         "test_full": { "type": "string", "description": "The one full run per cut." },
         "typecheck": { "type": "string" },
         "typecheck_clean": { "type": "string" },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "cleanup_list": {
+          "type": "string",
+          "description": "Read-only: lists what a batch leaves behind (worktrees, branches, test DBs, ports). Run once at batch close."
+        }
       }
     },
     "gates": {
       "type": "object",
-      "description": "The gate registry: gate name -> how to run it. Tiers name gates from here.",
+      "description": "The gate registry: gate name -> how to run it. Tiers name gates from here. A \"notes\" string is allowed and is not a gate.",
       "additionalProperties": {
         "type": "object",
-        "required": ["cmd", "kind"],
+        "required": ["kind"],
         "additionalProperties": false,
         "properties": {
-          "cmd": { "type": "string", "minLength": 1 },
-          "kind": { "type": "string", "enum": ["check", "test", "rehearsal", "health"] },
+          "cmd": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The command. Required for every kind but agent; for an agent gate, an optional read-only helper whose output the agent receives."
+          },
+          "kind": { "type": "string", "enum": ["check", "test", "rehearsal", "health", "agent"] },
+          "verifier": {
+            "type": "string",
+            "minLength": 1,
+            "description": "kind agent only, and required there: the agent type that judges the gate. It passes only when that agent returns PASS."
+          },
+          "asks": {
+            "type": "string",
+            "minLength": 1,
+            "description": "kind agent only: the one-line task the agent is given."
+          },
           "heavy": { "type": "string", "description": "A heavy_jobs slot name." },
           "smoke": { "type": "boolean", "description": "Safe to run in the scaffold's smoke run." },
           "notes": { "type": "string" }
         }
-      }
+      },
+      "properties": { "notes": {"type": "string"} }
     },
     "tiers": {
       "type": "object",
       "description": "When each gate runs. Every entry names a gate in the registry.",
       "additionalProperties": false,
       "properties": {
-        "per_commit": { "type": "array", "items": { "type": "string" } },
-        "lane_end": { "type": "array", "items": { "type": "string" } },
-        "merge": { "type": "array", "items": { "type": "string" } },
-        "cut_end": { "type": "array", "items": { "type": "string" } },
-        "track_merge": { "type": "array", "items": { "type": "string" } },
+        "per_commit": { "type": "array", "items": {"type": "string"} },
+        "lane_end": { "type": "array", "items": {"type": "string"} },
+        "merge": { "type": "array", "items": {"type": "string"} },
+        "cut_end": { "type": "array", "items": {"type": "string"} },
+        "track_merge": { "type": "array", "items": {"type": "string"} },
         "notes": { "type": "string" }
       }
     },
@@ -78,7 +101,7 @@
         "required": ["paths", "verifier"],
         "additionalProperties": false,
         "properties": {
-          "paths": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "paths": { "type": "array", "minItems": 1, "items": {"type": "string"} },
           "verifier": { "type": "string", "description": "An installed agent type." },
           "reason": { "type": "string" },
           "notes": { "type": "string" }
@@ -87,16 +110,38 @@
     },
     "heavy_jobs": {
       "type": "object",
-      "description": "Slot name -> how many may run at once, and where the locks live.",
+      "description": "Slot name -> how many may run at once, and where the locks live. A \"notes\" string is allowed and is not a job.",
       "additionalProperties": {
         "type": "object",
-        "required": ["slots", "lock_dir"],
+        "required": ["slots"],
         "additionalProperties": false,
         "properties": {
           "slots": { "type": "integer", "minimum": 1 },
-          "lock_dir": { "type": "string" },
+          "lock_dir": {
+            "type": "string",
+            "description": "Where the slot locks live. Default ${TMPDIR:-/tmp}/workflow-slots/<job>; profile-check warns when it is unset."
+          },
+          "self_locking": {
+            "type": "boolean",
+            "description": "The job takes its own lock: skills never wrap it in slot.sh. The watchdog still counts its holders in lock_dir."
+          },
           "notes": { "type": "string" }
         }
+      },
+      "properties": { "notes": {"type": "string"} }
+    },
+    "merge": {
+      "type": "object",
+      "description": "How a lane merge renumbers and checks migrations (merge-lane.mjs).",
+      "additionalProperties": false,
+      "properties": {
+        "renumber": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Puts the lane's colliding migrations after the integration head's. Placeholder {base}: the integration head before the merge."
+        },
+        "check": { "type": "string", "minLength": 1, "description": "Verifies the migration journal after the merge." },
+        "notes": { "type": "string" }
       }
     },
     "test_db": {
@@ -114,7 +159,7 @@
           "minLength": 1,
           "description": "Template of the {url} placeholder. Placeholders {host}, {port}, {name}; {host} and {name} are required. Default postgresql://{host}:{port}/{name}. A user and password may be written in it only for a local test database."
         },
-        "allow_hosts": { "type": "array", "items": { "type": "string" } },
+        "allow_hosts": { "type": "array", "items": {"type": "string"} },
         "notes": { "type": "string" }
       }
     },
@@ -122,7 +167,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1 } },
+        "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1} },
         "registry": { "type": "string" },
         "names": {
           "type": "array",
@@ -133,7 +178,7 @@
         "offsets": {
           "type": "object",
           "description": "Port name -> offset from the lane's base port, e.g. {\"web\": 2000}. A name without one takes the next free offset 0, 1, 2…",
-          "properties": { "notes": { "type": "string" } },
+          "properties": { "notes": {"type": "string"} },
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "notes": { "type": "string" }
