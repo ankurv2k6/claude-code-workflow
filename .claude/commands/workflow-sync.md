@@ -76,8 +76,9 @@ For the profile-class lessons:
 ## Step 5: Apply by risk
 
 - With `--apply-additions`: apply the `addition` changes only, as `_shared-project-profile.md` §Apply by
-  risk says (re-diff until `only_additions` is `true`, smoke-run each added gate, check, provenance,
-  `updated`, one commit). An added gate that fails its smoke run is not applied: it becomes an Owner item.
+  risk says (re-diff until `only_additions` is `true`, smoke-run each gate newly added to a tier, check, provenance,
+  `updated`, one commit). A gate that fails its smoke run is not applied: it becomes an Owner item. A new gate in the
+  registry is a new command, so it is always an Owner item.
 - Every other change, and every change on a run without the flag, becomes an Owner item naming the
   key, the old and new value, and the lesson.
 

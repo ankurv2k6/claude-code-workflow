@@ -139,8 +139,8 @@ projects with profiles; promotion across projects waits until there are two.)
 
 | Class | Example | Action |
 |---|---|---|
-| `addition` | a new gate in a tier, a new invariant suite, a new risk route | **may be applied**, by the batch's orchestrator, as its last step |
-| `command-change` | a changed `commands.*` or gate `cmd` | Owner item |
+| `addition` | an existing gate added to a tier, a new invariant suite, a new risk route | **may be applied**, by the batch's orchestrator, as its last step |
+| `command-change` | a changed `commands.*` or gate `cmd`; **a new gate in the registry** (a new command to run), and a tier entry naming it | Owner item |
 | `removal` | a gate, suite or route taken out | Owner item |
 | `test-db-change` | a changed `test_db.*` value | Owner item |
 | `limit-change` | a changed `limits.*` value | Owner item |
@@ -152,7 +152,7 @@ projects with profiles; promotion across projects waits until there are two.)
   answer. Read its JSON: `only_additions: true` (and `owner_items: 0`) is the only state that allows an
   apply.
 - **Applying:** write the profile with only the additions; re-run `profile-diff.mjs` and confirm
-  `only_additions` is `true`; then **smoke-run each added gate** with the `shell_prefix` (so the shell is
+  `only_additions` is `true`; then **smoke-run each gate newly added to a tier** with the `shell_prefix` (so the shell is
   stripped of credentials as the project requires): `profile-check.mjs --profile <file> --smoke --only
   gates.<name>` for a gate marked `smoke: true`, and for any other gate the static checks only (placeholders
   fillable, every script and path it names exists), never a run. An added gate that fails is taken out
