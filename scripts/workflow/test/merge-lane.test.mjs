@@ -91,6 +91,35 @@ test('merge-lane: a renumber that changes the tree is committed and the tier run
   assert.match(r.out, /tiers\.merge: quick pass/);
 });
 
+test('merge-lane: merge.check gets the placeholders filled ({base} = the integration head before the merge)', (t) => {
+  const f = fixture(t, { profile: { merge: { check: 'echo {base} >> ../check.log' } } });
+  const before = f.head();
+  const r = ml(f, '--apply', '--name', 'db');
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.equal(readFileSync(join(f.d, 'check.log'), 'utf8').trim(), before);
+  assert.match(r.out, /check: pass/);
+});
+
+test('merge-lane: untracked files that predate the renumber are never committed, and a renumber that changes nothing keeps the skip', (t) => {
+  const f = fixture(t);
+  sh(f.repo, 'git checkout -q feat/x-a && git merge -q --no-edit int && git checkout -q int && echo junk > stray.txt', f.d);
+  const r = ml(f, '--apply', '--verified-head', f.head('feat/x-a'));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /renumber: no change/);
+  assert.match(r.out, /tiers\.merge: skipped/);
+  assert.equal(sh(f.repo, 'git ls-files stray.txt', f.d), '', 'the stray file stays untracked');
+  assert.ok(existsSync(join(f.repo, 'stray.txt')));
+
+  // a renumber that writes a new file and edits a tracked one: both, and only those, are committed
+  const g = fixture(t, { profile: { merge: { renumber: 'echo n > renumbered.txt && echo x >> README.md' } } });
+  sh(g.repo, 'echo junk > stray.txt', g.d);
+  const r2 = ml(g, '--apply', '--name', 'db');
+  assert.equal(r2.code, 0, r2.out);
+  assert.match(r2.out, /renumber: changed the tree, committed/);
+  assert.deepEqual(sh(g.repo, 'git show --name-only --format= HEAD', g.d).split('\n').sort(), ['README.md', 'renumbered.txt']);
+  assert.equal(sh(g.repo, 'git ls-files stray.txt', g.d), '');
+});
+
 test('merge-lane: a conflict is listed, never resolved: exit 2 and the merge is aborted', (t) => {
   const f = fixture(t, { laneFile: 'README.md' });
   sh(f.repo, 'echo other > README.md && git commit -qam other', f.d);
