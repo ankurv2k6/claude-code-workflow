@@ -7,7 +7,7 @@ started: <YYYY-MM-DD>
 status: in_progress
 max_lanes: 5
 stall_minutes: 45
-rules: ~/.claude/commands/_shared-autonomous.md §3 + context/batch-briefs/<set>/_common.md
+rules: ~/.claude/commands/_shared-autonomous.md §3 + context/batch-briefs/_common.md (its `## Delta: <set>` section)
 profile: <.claude/workflow-profile.json, or none (v1 mechanics)>
 lessons: context/workflow-lessons.md (written by /workflow-sync as the last step)
 ---
@@ -41,10 +41,15 @@ Status: ⏳ PENDING · 🔄 RUNNING · 🔎 VERIFYING · ✅ MERGED · ⚠️ VE
 | Lane | Role | Agent id | Worktree | Branch (base sha) | Test DBs | Brief | Effort | Launched | Last commit seen | State |
 |---|---|---|---|---|---|---|---|---|---|---|
 
-Role: lane · verify · integration-fix · design-area. State: running · finished · dead · relaunched → <id>.
+Role: lane · verify · integration-fix · design-area. State: running · finished · split (session ended at the context
+budget; its relaunch does not count toward the 2-relaunch limit) · dead · relaunched → <id>.
 
 ## Resume after an interruption
 
+Full procedure: `_shared-agent-tracking.md`. In short:
+
+0. Check that no other orchestrator session is already running this batch. Confirm `workflow_version`: if it differs
+   from the installed `VERSION`, follow that version's text (`git -C ~/claudeworkflow show v<version>:…`).
 1. Read this file. In each running lane's worktree: `git log <base>..HEAD` and `.lane/progress.md`.
 2. Agent id known → `SendMessage` it first; it resumes with full context.
 3. Unknown or no reply → relaunch from its brief with: "Continue. Do not redo committed work.
