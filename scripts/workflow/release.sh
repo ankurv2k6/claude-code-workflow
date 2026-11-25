@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # release.sh — pin the installed workflow to a tag: a detached worktree plus two symlinks. bash 3.2.
 set -u
 
@@ -20,9 +20,16 @@ What it does:
      inside a checkout, or is on a branch: a release worktree is always detached);
   2. points ~/.claude/commands at <dest>/.claude/commands and ~/.claude/templates at
      <dest>/.claude/templates. An existing symlink is replaced; a real directory is never deleted:
-     it is renamed to <name>.pre-release-<timestamp>.
+     it is renamed to <name>.pre-release-<timestamp>-<pid> (a counter is added if that exists).
 Rollback is the same command with the previous tag (printed below as "currently").
 It never pushes, fetches or deletes. The owner runs it at switch-over; lanes never do.
+
+Switch-over to a new major version, in this order:
+  1. release.sh v1.0.0 --apply        pin every project to v1 first (tag the last 1.x commit
+                                      v1.0.0 if it is not tagged yet);
+  2. merge the new version into main and tag it (v2.0.0);
+  3. release.sh v2.0.0 --apply        move the pinned checkout to v2.
+A batch in flight keeps its own workflow_version throughout.
 
 Exit: 0 done (or dry run printed) · 1 refused · 2 usage.
 EOF
@@ -104,17 +111,19 @@ else
 fi
 
 # 2. the symlinks
-STAMP=$(date '+%Y%m%d-%H%M%S')
+STAMP="$(date '+%Y%m%d-%H%M%S')-$$"
 link() {
-  local name=$1 target="$DEST/.claude/$1" path="$CLAUDE_DIR/$1" now
+  local name=$1 target="$DEST/.claude/$1" path="$CLAUDE_DIR/$1" now aside n=1
   if [ -L "$path" ]; then
     now=$(readlink "$path")
     if [ "$now" = "$target" ]; then echo "  keep  $path -> $target"; return; fi
     echo "  link  $path: $now -> $target"
     do_or_say rm "$path"
   elif [ -e "$path" ]; then
-    echo "  move  $path is not a symlink; it is kept as $path.pre-release-$STAMP"
-    do_or_say mv "$path" "$path.pre-release-$STAMP"
+    aside="$path.pre-release-$STAMP"
+    while [ -e "$aside" ] || [ -L "$aside" ]; do aside="$path.pre-release-$STAMP-$n"; n=$((n + 1)); done
+    echo "  move  $path is not a symlink; it is kept as $aside"
+    do_or_say mv "$path" "$aside"
   else
     echo "  link  $path (new) -> $target"
   fi

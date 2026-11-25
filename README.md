@@ -98,7 +98,7 @@ The goal: **maximize Claude Code's effectiveness on real, multi-week projects** 
 |----------|---------|--------------|
 | `~/.claude/commands/` | Shared slash commands symlinked from this repo | None (on-demand) |
 | `~/.claude/_repo/` | Agent repository catalog (`AGENT-INDEX.md`), sourced from [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) | None (read-only source) |
-| `~/.claude/templates/` | Templates the commands copy into a project: living task list, lane briefs, hard-guardrails snippet, test-map guide (symlinked from this repo) | None (on-demand) |
+| `~/.claude/templates/` | Templates the commands copy into a project: living task list, lane briefs, hard-guardrails snippet, test-map guide, profile schema and example, a user-level CLAUDE.md example (never installed) (symlinked from this repo) | None (on-demand) |
 | `~/.claude/plans/` | Standalone plan files for any project | None (on-demand) |
 | `~/.claude/workflow-release/` | Pinned checkout of a tagged release (`WORKFLOW_HOME`); `~/.claude/commands` and `templates` point here from 2.0.0 | None (on-demand) |
 
@@ -1207,9 +1207,14 @@ Every project then inherits the commands. A `git pull` in `~/claudeworkflow` upd
 **Versioning (2.0.0 and later).** `VERSION` holds the workflow version and `CHANGELOG.md` its behaviour
 changes. `scripts/workflow/release.sh v<version> --apply` pins `~/.claude/commands` and `templates` to a
 tagged checkout at `~/.claude/workflow-release`; the same command with the previous tag rolls back.
-Skills find the generic scripts at `$WORKFLOW_HOME/scripts/workflow/` (`WORKFLOW_HOME` defaults to that
-checkout; point it at a worktree to test unreleased scripts). Each batch is pinned to the version in its
-task list.
+Skills find the generic scripts at `$WH/scripts/workflow/`: `$WORKFLOW_HOME` when set (a worktree, to test
+unreleased scripts), else that checkout, else the repo `~/.claude/commands` points into (a v1 install
+before any release). Each batch is pinned to the version in its task list. Switch-over to a new major
+version: `release.sh v1.0.0 --apply` first, then merge and tag, then `release.sh v2.0.0 --apply`
+(`CHANGELOG.md`).
+The scripts: `profile-check`, `profile-diff`, `scaffold`, `slot.sh`, `watchdog`, `orch-event`, `run-tier`
+(one tier's gates), `merge-lane` (a lane merge with renumber, journal check and the merge tier),
+`build-report` (cost, rule breaches, critical path) and `release.sh`; each has `--help`.
 
 **Project profile (optional).** Copy `.claude/templates/workflow-profile.example.json` to
 `<project>/.claude/workflow-profile.json` and edit it. Without one, a project's mechanics stay as in 1.x.

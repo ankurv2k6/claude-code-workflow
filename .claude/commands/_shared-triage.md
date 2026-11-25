@@ -59,8 +59,12 @@ One table in the task list (or the module's report when run standalone):
 - **Independent.** A different agent from the one that wrote the code, on `agents.verifier_model`
   (default `opus`). Its brief says: "You did not write this code; be skeptical. Verify the implementer's
   claims, don't trust them."
-- **Verify what will merge.** First merge the integration branch into the lane, then verify the result.
-  This doubles as merge prep: migration renumbering, conflict resolution, the journal-order check.
+- **Verify what will merge, merging once.** Merge the integration branch into the lane once, at the start,
+  then verify the result. This doubles as merge prep: migration renumbering, conflict resolution, the
+  journal-order check. Merge again at the end **only if the integration branch moved**.
+- **`tiers.merge` once, on your final head**, never per sweep (`run-tier.mjs merge --parallel`), and record
+  that head's sha with the result. The orchestrator's merge skips the tier when the lane head is that sha
+  and it contains the integration head.
 - **Focus on the risk, not the whole module:**
   - **the delta** (`git diff <base>...HEAD`) **and its callers**: the code that imports or calls what
     changed;
@@ -81,4 +85,4 @@ One table in the task list (or the module's report when run standalone):
 - **Report** in the final reply, at most `limits.handback_lines` (default 30) lines, under these headings:
   `Verdict` · `Findings` (by severity, each fixed with its commit or deferred with its reason) · `UI parity`
   (per screen, pair paths) · `Stubs` (actionable vs blocked) · `Tests run` · `Merge prep` (migrations after
-  renumbering, final head sha).
+  renumbering, the final head sha, the integration head it contains, `tiers.merge` green or red on it).

@@ -30,14 +30,18 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
 | Each task | `commands.test_task` with every changed file in **one** call | the agent editing |
 | End of a lane or standalone module | `tiers.lane_end` once, then `commands.test_lane_end` once | the lane |
 | A verify sweep | its own fixes' delta; the callers' tests of any shared code it changed; the lane's `commands.test_lane_end` once | the verifier |
-| Merge into the integration branch | `tiers.merge`, through the project's merge script when the tier names one | the orchestrator |
-| End of a cut | `tiers.cut_end` (invariant gates first), the combined final, then `commands.test_full` once | the orchestrator |
+| Merge into the integration branch | `tiers.merge` through `merge-lane.mjs`, skipped when the verifier ran it green on the lane head that merged | the orchestrator |
+| End of a cut | `tiers.cut_end` (invariant gates first), the combined final, its fixes merged, then `commands.test_full` once (never a tier gate) | the orchestrator |
 | Merge between tracks, or before a release | `tiers.track_merge` | the orchestrator |
 
+- **A tier runs through `"$WH/scripts/workflow/run-tier.mjs" <tier>`** (`WH` per
+  `_shared-project-profile.md`; `--parallel` runs its independent `check` gates at once): the gates in order,
+  the prefix applied, agent gates listed for the skill to launch, never run as checks.
 - **Heavy gates** (a gate with `heavy`) run through `"$WH/scripts/workflow/slot.sh" <job>
-  <heavy_jobs.<job>.slots> --lock-dir <heavy_jobs.<job>.lock_dir> -- <cmd>` (`WH` per
-  `_shared-project-profile.md`). Exit 75 is a wait timeout (default 7200 s): the gate did not run, so it is
-  neither green nor red; run it again. Script absent: heavy gates run one at a time, by the orchestrator.
+  <heavy_jobs.<job>.slots> --lock-dir <heavy_jobs.<job>.lock_dir> -- <cmd>`, except when
+  `heavy_jobs.<job>.self_locking` is true: that job takes its own lock and is never wrapped. Exit 75 is a
+  wait timeout (default 7200 s): the gate did not run, so it is neither green nor red; run it again. Script
+  absent: heavy gates run one at a time, by the orchestrator.
 - **Long commands write to `logs_dir`** (default `logs`: `<cmd> > <logs_dir>/<lane>-<what>.log 2>&1`), so
   the watchdog sees progress.
 - **Known reds.** A failure listed in the `known_reds` file is checked once at Phase 0 and never

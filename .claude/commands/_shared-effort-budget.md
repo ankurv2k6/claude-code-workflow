@@ -41,7 +41,10 @@ its row names one), and its brief names the row of the table below that it uses.
 
 **Verifiers always run on `agents.verifier_model`** (default `opus`); an override never moves a verifier.
 Only a doc-only role (one that writes documents, never code or verdicts) may move to Sonnet, and only when
-`agents.overrides` names it. No profile: every role runs on the session default.
+`agents.overrides` names it. **One exception, a pilot:** when `agents.overrides` names `ui-lane-pilot`
+(e.g. `"ui-lane-pilot": "sonnet"`), one UI implementation lane per batch may run on that model, recorded in
+the Decision log; its verifier stays on `agents.verifier_model`, and the batch's build report compares the
+lane's findings and cost with the others'. No profile: every role runs on the session default.
 
 ## Delegation rules
 

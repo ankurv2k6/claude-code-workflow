@@ -5,13 +5,15 @@ import { readFileSync, readdirSync, existsSync, mkdirSync, appendFileSync, statS
 import { join, dirname, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { args, die, abs, readJson, writeAtomic, withLock, fill, runShell, git, today, projectRoot } from './lib/common.mjs';
-import { loadProfile, checkProfile, findSchema, dbUrl } from './lib/profile.mjs';
+import { loadProfile, checkProfile, findSchema, dbUrl, entriesOf } from './lib/profile.mjs';
+import { readTable, stripCode } from './lib/tasklist.mjs';
 
 const USAGE = `scaffold.mjs — set up a batch's lanes from a lane map (dry run unless --apply)
 
 Usage:
   node scaffold.mjs --lane-map <map.json> [--profile <path>] [--repo <dir>] [--apply]
-                    [--briefs-dir <dir>]… [--smoke-commands <k1,k2>] [--skip-db] [--skip-smoke] [--json]
+                    [--lanes <id,id>] [--task-list <path>] [--briefs-dir <dir>]…
+                    [--smoke-commands <k1,k2>] [--skip-db] [--skip-smoke] [--json]
 
 Lane map (JSON, context/batch-briefs/<set>/lane-map.json):
   { "set": "x", "base": "<ref the lanes branch from>", "worktree_root": "../my-app-wt",
@@ -27,10 +29,17 @@ Lane map (JSON, context/batch-briefs/<set>/lane-map.json):
               means it may start beside C0 when it consumes no contract under review
   merge_order 1, 2, … the order the orchestrator merges in
   ports       port names to allocate; absent: profile ports.names (default ["api"]); [] for none
+  int_db      on the map, not a lane: false skips the integration test DB (below)
   The scaffold reads lane, branch, worktree, base, ports, test_db and brief; it ignores modules,
   tasks, waits_on and merge_order, which /implement-batch reads (the task list records them).
   Defaults: branch lane/<set>-<lane>; worktree <worktree_root>/<set>-<lane>; worktree_root
   ../<repo name>-wt; test_db true when the profile has test_db.create.
+
+Lane-map validator (--task-list <path>): before anything else, every waits_on entry of every lane
+being scaffolded must name a lane marked MERGED in that task list (its Execution plan Status, or
+all of its Module status rows). Otherwise the scaffold refuses with exit 2 and names each lane and
+input: a lane never launches against unmerged code. --lanes <ids> scaffolds only those lanes of
+the map (a launch wave); the validator checks only them.
 
 Steps, in order:
   1. ports    allocate each lane's named ports via the registry (profile ports.registry, default
@@ -43,12 +52,17 @@ Steps, in order:
               web 6400; the next lane api 4410, web 6410. {port} is the first name's port.
               A missing registry is seeded by scanning brief files (context/batch-briefs/ and
               --briefs-dir) for port numbers in range, so ports already handed out are not reused.
-              Re-running reuses a lane's existing ports.
+              Re-running reuses a lane's existing ports. With --apply the registry is read,
+              allocated and written under a mkdir lock (<registry>.lock), so concurrent scaffolds
+              never hand out one port twice.
   2. worktree git worktree add -b <branch> <path> <base> (or onto an existing branch); an existing
               worktree on the same branch is kept. .lane/ is added to info/exclude.
   3. test DB  profile test_db.create with {name} {url} {port}, then test_db.bootstrap; the name
               comes from test_db.name_pattern ({set}, {lane}), {url} from test_db.url (default
               postgresql://{host}:{port}/{name}); test_db.host must be in allow_hosts.
+              Also one integration test DB for the merge gates and the final: the same pattern
+              with {lane} = int (e.g. app_<set>_int_test); its URL is printed, for the task
+              list's integration_test_db header. Map "int_db": false skips it.
   4. health   every gate of kind "health", once, in the repo root.
   5. smoke    in the first lane's worktree, with that lane's placeholders: commands.install, then
               commands.build (each when defined; always in a worktree this run creates, else only
@@ -61,7 +75,7 @@ Steps, in order:
 Without --apply nothing is created, written, run or committed: each step prints what it would do.
 --apply creates worktrees, branches, the registry and test DBs, and runs commands; it commits nothing.
 
-Exit: 0 ok · 1 a step failed · 2 usage.`;
+Exit: 0 ok · 1 a step failed · 2 usage, or the lane-map validator refused a lane.`;
 
 const laneToken = (l) => String(l).toLowerCase().replace(/[^a-z0-9]+/g, '_');
 const slug = (l) => String(l).toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -211,9 +225,15 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
     return out;
   });
 
+  let intDb = null;
+  if (db?.create && !skipDb && map.int_db !== false) {
+    const name = fill(db.name_pattern || '{set}_{lane}_test', { set: laneToken(set), lane: 'int' }, { quote: false }).cmd;
+    if (!lanes.some((l) => l.db?.name === name)) intDb = { name, url: dbUrl(db, name) };
+  }
+
   // 1. ports
   const range = profile?.ports?.range || [4400, 4999];
-  const regPath = resolve(repo, profile?.ports?.registry || '.claude/ports.json');
+  const regPath = registryPath(repo, profile);
   let registry;
   let seeded = null;
   if (existsSync(regPath)) registry = readJson(regPath, 'port registry');
@@ -260,11 +280,20 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
       if (db.create) steps.push({ step: 'test-db', lane: l.lane, what: fill(db.create, v).cmd, run: fill(db.create, v).cmd, cwd: repo });
       if (db.bootstrap) steps.push({ step: 'test-db', lane: l.lane, what: fill(db.bootstrap, v).cmd, run: fill(db.bootstrap, v).cmd, cwd: repo });
     }
+  if (intDb) {
+    if (Array.isArray(db.allow_hosts) && !db.allow_hosts.includes(db.host || '127.0.0.1'))
+      steps.push({ step: 'test-db', lane: 'int', what: `refused: test_db.host ${db.host} is not in allow_hosts`, error: true });
+    else {
+      const v = { name: intDb.name, url: intDb.url, port: db.port, lane: 'int', set: laneToken(set) };
+      steps.push({ step: 'test-db', lane: 'int', what: fill(db.create, v).cmd, run: fill(db.create, v).cmd, cwd: repo });
+      if (db.bootstrap) steps.push({ step: 'test-db', lane: 'int', what: fill(db.bootstrap, v).cmd, run: fill(db.bootstrap, v).cmd, cwd: repo });
+    }
+  }
 
   // 4. health gates
   const healthRan = new Set();
-  for (const [name, g] of Object.entries(profile?.gates || {}))
-    if (g?.kind === 'health') {
+  for (const [name, g] of entriesOf(profile?.gates))
+    if (g.kind === 'health') {
       healthRan.add(name);
       steps.push({ step: 'health', what: `${name}: ${g.cmd}`, run: g.cmd, cwd: repo });
     }
@@ -290,15 +319,48 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
       const c = profile.commands?.[k];
       if (typeof c === 'string') smokeCmd(k, c, l.fresh || smokeCommands.includes(k));
     }
-    for (const [name, g] of Object.entries(profile.gates || {})) {
-      if (g?.smoke !== true || healthRan.has(name)) continue; // a health gate already ran in step 4
+    for (const [name, g] of entriesOf(profile.gates)) {
+      if (g.smoke !== true || healthRan.has(name) || g.kind === 'agent') continue; // a health gate already ran in step 4; an agent gate is launched by a skill
       const f = fill(g.cmd, v);
       if (f.missing.length) steps.push({ step: 'smoke', what: `gates.${name}: unfilled {${f.missing.join('}, {')}}`, error: true });
       else steps.push({ step: 'smoke', what: `gates.${name}: ${f.cmd}`, run: f.cmd, cwd: l.worktree, after: true });
     }
     for (const [k, c] of cmds) if (!PREP.includes(k)) smokeCmd(k, c, false);
   }
-  return { set, repo, lanes, steps };
+  return { set, repo, lanes, steps, intDb, regPath };
+}
+
+/** The port registry's path for a repo and profile. */
+export const registryPath = (repo, profile) => resolve(repo, profile?.ports?.registry || '.claude/ports.json');
+
+/** Lanes marked MERGED in a task list: the Execution plan's Status, or every Module status row of the lane. */
+export function mergedLanes(text) {
+  const merged = new Set();
+  const plan = readTable(text, 'Execution plan');
+  for (const r of plan?.rows || []) {
+    const lane = stripCode(r.Lane || r._cells[0]);
+    const status = r.Status ?? r._cells.at(-1);
+    if (lane && /merged/i.test(status || '')) merged.add(lane);
+  }
+  const mods = readTable(text, 'Module status');
+  const byLane = new Map();
+  for (const r of mods?.rows || []) {
+    const lane = stripCode(r.Lane || '');
+    if (!lane) continue;
+    byLane.set(lane, (byLane.get(lane) ?? true) && /merged/i.test(r.Status || ''));
+  }
+  for (const [lane, all] of byLane) if (all) merged.add(lane);
+  return merged;
+}
+
+/** Each lane whose waits_on names a lane that is not MERGED: [{ lane, waits }]. */
+export function unmergedInputs(lanes, merged) {
+  const out = [];
+  for (const l of lanes) {
+    const waits = (l.waits_on || []).filter((w) => !merged.has(w));
+    if (waits.length) out.push({ lane: l.lane, waits });
+  }
+  return out;
 }
 
 function excludeLane(worktree) {
@@ -311,10 +373,31 @@ function excludeLane(worktree) {
   mkdirSync(join(worktree, '.lane'), { recursive: true });
 }
 
+function writeRegistry(s) {
+  mkdirSync(dirname(s.write.path), { recursive: true });
+  writeAtomic(s.write.path, `${JSON.stringify(s.write.registry, null, 2)}\n`);
+  s.status = 'done';
+}
+
+/** Plan and write the port registry under its lock, so two scaffolds never allocate the same port. */
+export function planLocked(opts, regPath) {
+  mkdirSync(dirname(regPath), { recursive: true });
+  return withLock(
+    regPath,
+    () => {
+      const p = plan(opts);
+      for (const s of p.steps) if (s.write) writeRegistry(s);
+      return p;
+    },
+    { waitMs: 60000 },
+  );
+}
+
 export function execute(p, profile) {
   let failed = false;
   let prepFailed = '';
   for (const s of p.steps) {
+    if (s.status === 'done') continue; // written under the registry lock already
     if (s.error || s.skip) {
       s.status = s.error ? 'fail' : 'skip';
       failed ||= !!s.error;
@@ -327,14 +410,8 @@ export function execute(p, profile) {
       continue;
     }
     if (s.write) {
-      withLock(s.write.path, () => {
-        mkdirSync(dirname(s.write.path), { recursive: true });
-        // Merge with whatever another scaffold wrote since we read it.
-        const cur = existsSync(s.write.path) ? readJson(s.write.path, 'port registry') : { allocations: {} };
-        const merged = { ...s.write.registry, allocations: { ...s.write.registry.allocations, ...(cur.allocations || {}) } };
-        writeAtomic(s.write.path, `${JSON.stringify(merged, null, 2)}\n`);
-      });
-      s.status = 'done';
+      // Only reached without the registry lock (a caller of execute() that did not plan under it).
+      withLock(s.write.path, () => writeRegistry(s));
     } else if (s.git) {
       const r = git(p.repo, ...s.git);
       s.status = r.code === 0 ? 'done' : 'fail';
@@ -362,6 +439,7 @@ export function render(p, applied) {
   lines.push('| Lane | Branch | Worktree | Base | Ports | Test DB |', '|---|---|---|---|---|---|');
   for (const l of p.lanes)
     lines.push(`| ${l.lane} | ${l.branch} | ${l.worktree} | ${l.base} | ${Object.entries(l.portMap).map(([k, v]) => `${k} ${v}`).join(', ') || '—'} | ${l.db?.name || '—'} |`);
+  if (p.intDb) lines.push('', `Integration test DB: ${p.intDb.name} (${p.intDb.url}); record it as the task list's integration_test_db`);
   lines.push('');
   for (const s of p.steps) {
     const tag = applied ? s.status : s.error ? 'fail' : s.skip ? 'skip' : 'would';
@@ -382,6 +460,8 @@ export function main(argv) {
       'smoke-commands': { type: 'string' },
       'skip-db': { type: 'boolean' },
       'skip-smoke': { type: 'boolean' },
+      lanes: { type: 'string' },
+      'task-list': { type: 'string' },
       json: { type: 'boolean' },
     },
     USAGE,
@@ -394,12 +474,25 @@ export function main(argv) {
   let map, profile, p;
   try {
     map = readJson(abs(flags['lane-map']), 'lane map');
+    if (flags.lanes) {
+      const want = flags.lanes.split(',').map((x) => x.trim()).filter(Boolean);
+      const unknown = want.filter((w) => !(map.lanes || []).some((l) => l.lane === w));
+      if (unknown.length) die(`--lanes: not in the lane map: ${unknown.join(', ')}`);
+      map = { ...map, lanes: map.lanes.filter((l) => want.includes(l.lane)) };
+    }
+    if (flags['task-list']) {
+      const tl = abs(flags['task-list']);
+      if (!existsSync(tl)) die(`no task list at ${tl}`);
+      const bad = unmergedInputs(map.lanes || [], mergedLanes(readFileSync(tl, 'utf8')));
+      if (bad.length)
+        die(`scaffold: refused: a lane waits on a lane not MERGED in ${flags['task-list']}:\n${bad.map((b) => `  ${b.lane} waits on ${b.waits.join(', ')}`).join('\n')}`, 2);
+    }
     profile = loadProfile(profilePath);
     if (profile) {
       const errs = checkProfile(profile, findSchema().schema);
       if (errs.length) die(`profile ${profilePath} is invalid:\n  ${errs.join('\n  ')}`, 1);
     }
-    p = plan({
+    const opts = {
       map,
       profile,
       repo,
@@ -407,7 +500,8 @@ export function main(argv) {
       skipDb: flags['skip-db'],
       skipSmoke: flags['skip-smoke'],
       smokeCommands: (flags['smoke-commands'] || '').split(',').filter(Boolean),
-    });
+    };
+    p = flags.apply ? planLocked(opts, registryPath(repo, profile)) : plan(opts);
   } catch (e) {
     die(`scaffold: ${e.message}`, 1);
   }

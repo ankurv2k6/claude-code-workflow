@@ -1,20 +1,22 @@
 ---
 set: <set name, e.g. ss>
-workflow_version: <$WORKFLOW_HOME/VERSION at Phase 0, e.g. 2.0.0; never changed mid-batch>
+workflow_version: <$WH/VERSION at Phase 0, e.g. 2.0.0; never changed mid-batch>
 integration_branch: <branch the lanes branch from and merge into>
 base_sha: <sha the first lanes branch from>
 started: <YYYY-MM-DD>
 status: in_progress
+integration_test_db: <the scaffold's integration test DB URL, for the merge gates and the final>
+accepted_on_beta: <YYYY-MM-DD the owner accepted the result; empty until then>
 max_lanes: 5
 stall_minutes: 45
-rules: ~/.claude/commands/_shared-autonomous.md §3 + context/batch-briefs/_common.md (its `## Delta: <set>` section)
+rules: $WH/.claude/commands/_shared-autonomous.md §3 (installed at ~/.claude/commands after release) + context/batch-briefs/_common.md (its `## Delta: <set>` section)
 profile: <.claude/workflow-profile.json, or none (v1 mechanics)>
 lessons: context/workflow-lessons.md (written by /workflow-sync as the last step)
 ---
 
 <!--
 The living task list. Only the orchestrator writes it. Commit it after every merge.
-Protocols: ~/.claude/commands/_shared-agent-tracking.md (tracking, resume),
+Protocols: $WH/.claude/commands/_shared-agent-tracking.md (installed at ~/.claude/commands after release; tracking, resume),
 _shared-triage.md (deferred findings), _shared-effort-budget.md (effort per role),
 _shared-project-profile.md (profile, gates, apply by risk).
 On resume, a workflow_version that differs from the installed VERSION follows its own version's text.
@@ -81,6 +83,19 @@ Written when the correction happens, in the owner's words. `/workflow-sync` harv
 
 | Item | Raised by | Default until decided |
 |---|---|---|
+
+## Close
+
+Written at the batch's close step from `build-report.mjs --breaches --critical-path` and the lessons file.
+
+| Measure | Value |
+|---|---|
+| Rule breaches (vitest no path · clean typecheck · rehearsal · turns over budget · orchestrator context) | |
+| Escaped defects since the last batch (from context/workflow-lessons.md) | |
+| Building · checking · documents · waiting (minutes) | |
+| Orchestrator average context | |
+| Time to owner acceptance (started → accepted_on_beta) | pending |
+| Cleanup list (commands.cleanup_list) | |
 
 ## Lessons
 

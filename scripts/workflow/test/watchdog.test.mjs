@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp, run, write, gitRepo, sh } from './helpers.mjs';
 import { taskList } from './tasklist-fixture.mjs';
@@ -127,4 +127,76 @@ test('watchdog: a task list with no Agents table exits 0 (nothing to watch), not
   const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--once']);
   assert.equal(r.code, 0, r.out + r.err);
   assert.match(r.out, /batch not running \(status: no Agents table\)/);
+});
+
+test('watchdog: a lane queued for a slot (slot.sh waiting marker) is active, not stalled', (t) => {
+  const f = fixture(t);
+  const lock = join(f.d, 'locks', 'rehearsal');
+  mkdirSync(join(lock, 'waiting'), { recursive: true });
+  writeFileSync(join(lock, 'waiting', String(process.pid)), `A\n${f.wtA}\n2026-11-25T10:00:00+0000\n`);
+  writeFileSync(join(lock, 'waiting', '999999'), `A\n${f.wtA}\n`); // a dead waiter counts for nothing
+  const tl = write(join(f.d, 'context', 'batch-progress.md'), taskList(f.rows.filter((r) => r.lane === 'A')));
+  const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--json', '--once', '--no-proc']);
+  assert.equal(r.code, 4, r.out + r.err);
+  const a = JSON.parse(r.out).lanes[0];
+  assert.equal(a.stalled, false);
+  assert.match(a.reason, /waits for slot rehearsal/);
+});
+
+test('watchdog: a self-locking job\'s own pid file and a slot\'s live child pid count as holders', (t) => {
+  const f = fixture(t);
+  const own = join(f.d, 'locks', 'own');
+  mkdirSync(join(own, 'db-lock'), { recursive: true });
+  writeFileSync(join(own, 'db-lock', 'pid'), `${process.pid}\n`);
+  writeFileSync(join(own, 'db-lock', 'holder'), 'A\n');
+  // slot.sh was killed -9 (pid dead) but its command (child) still runs: still held
+  const lock = join(f.d, 'locks', 'rehearsal');
+  mkdirSync(join(lock, 'slot-2'), { recursive: true });
+  writeFileSync(join(lock, 'slot-2', 'pid'), '999999\n');
+  writeFileSync(join(lock, 'slot-2', 'child'), `${process.pid}\n`);
+  writeFileSync(join(lock, 'slot-2', 'holder'), 'B\n');
+  const p = JSON.parse(readFileSync(f.profile, 'utf8'));
+  p.heavy_jobs.own = { slots: 1, lock_dir: own, self_locking: true };
+  write(f.profile, p);
+  const rows = f.rows.filter((r) => r.lane === 'A').concat([{ lane: 'B', worktree: f.wtA + '-none', launched: stamp(hoursAgo(4)) }]);
+  const tl = write(join(f.d, 'context', 'batch-progress.md'), taskList(rows.slice(0, 1)));
+  const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--json', '--once', '--no-proc']);
+  const a = JSON.parse(r.out).lanes[0];
+  assert.equal(a.stalled, false, r.out);
+  assert.match(a.reason, /holds slot own\/db-lock/);
+  // the child-held slot, matched by holder name
+  const tlB = write(join(f.d, 'context', 'batch-progress.md'), taskList([{ lane: 'B', worktree: f.wtB, launched: stamp(hoursAgo(4)) }]));
+  const b = JSON.parse(run('watchdog.mjs', ['--task-list', tlB, '--profile', f.profile, '--json', '--once', '--no-proc', '--stall-minutes', '1']).out).lanes[0];
+  assert.match(b.reason, /holds slot rehearsal\/slot-2/);
+});
+
+test('watchdog: a live process whose cwd is inside the worktree keeps the lane active; --no-proc ignores it', async (t) => {
+  const f = fixture(t);
+  const { spawn } = await import('node:child_process');
+  const child = spawn('sleep', ['30'], { cwd: f.wtA, stdio: 'ignore' });
+  t.after(() => process.kill(child.pid));
+  await new Promise((r) => setTimeout(r, 200));
+  const tl = write(join(f.d, 'context', 'batch-progress.md'), taskList(f.rows.filter((r) => r.lane === 'A')));
+  const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--json', '--once']);
+  const a = JSON.parse(r.out).lanes[0];
+  assert.equal(a.stalled, false, r.out);
+  assert.match(a.reason, new RegExp(`live process ${child.pid} runs in the worktree`));
+  const off = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--json', '--once', '--no-proc']);
+  assert.equal(off.code, 3);
+});
+
+test('watchdog: an absolute logs_dir counts only the files that name the lane', (t) => {
+  const f = fixture(t);
+  const logs = join(f.d, 'shared-logs');
+  write(join(logs, 'other-lane-test.log'), 'x\n');
+  const p = JSON.parse(readFileSync(f.profile, 'utf8'));
+  p.logs_dir = logs;
+  write(f.profile, p);
+  const tl = write(join(f.d, 'context', 'batch-progress.md'), taskList(f.rows.filter((r) => r.lane === 'A')));
+  const args = ['--task-list', tl, '--profile', f.profile, '--json', '--once', '--no-proc'];
+  assert.equal(run('watchdog.mjs', args).code, 3, 'another lane\'s log does not count');
+  write(join(logs, 'a-lane-end.log'), 'running\n');
+  const r = run('watchdog.mjs', args);
+  assert.equal(r.code, 4, r.out);
+  assert.equal(JSON.parse(r.out).lanes[0].stalled, false);
 });

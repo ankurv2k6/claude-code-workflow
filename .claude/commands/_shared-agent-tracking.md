@@ -29,7 +29,7 @@ Templates: `$WH/.claude/templates/batch-progress.md` and `$WH/.claude/templates/
 `_shared-project-profile.md` defines it, so the templates and the skills come from the same version.
 
 **Task-list events** (Agents rows, module status, decisions, owner corrections) go through
-`"${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/scripts/workflow/orch-event.mjs"`, which takes times
+`"$WH/scripts/workflow/orch-event.mjs"` (`WH` per `_shared-project-profile.md`), which takes times
 from the clock; `--commit` commits the change. Script absent: edit the task list by hand, with times from
 `date`, never estimated.
 
@@ -77,8 +77,8 @@ Role is `lane`, `verify`, `integration-fix` or `design-area`. State is `running`
 running agents your session can list, the task list's latest Checkpoint entry). If one is alive, hand over
 to it and stop; never two writers.
 
-**Workflow version.** Read the task list's `workflow_version` and the installed
-`${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/VERSION`. If they differ, follow the batch's own version
+**Workflow version.** Read the task list's `workflow_version` and the installed `$WH/VERSION` (`WH` per
+`_shared-project-profile.md`: before the first release, the repo `~/.claude/commands` points into). If they differ, follow the batch's own version
 for the rest of it: read each command and protocol with
 `git -C ~/claudeworkflow show v<version>:.claude/commands/<file>` (templates likewise). Never mix versions
 inside one batch. No `workflow_version` in the header: the batch predates versioning and is `1.0.0`; read

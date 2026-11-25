@@ -4,7 +4,7 @@
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { args, die, fill, runShell, defaultProfilePath, abs } from './lib/common.mjs';
-import { findSchema, checkProfile, loadProfile, smokeEntries } from './lib/profile.mjs';
+import { findSchema, checkProfile, loadProfile, smokeEntries, semanticWarnings, entriesOf } from './lib/profile.mjs';
 
 const USAGE = `profile-check.mjs — validate <project>/.claude/workflow-profile.json
 
@@ -14,10 +14,17 @@ Usage:
                          [--timeout <s>]
 
 Checks the profile against the schema (--schema, else .claude/templates/
-workflow-profile.schema.json in this checkout, else in $WORKFLOW_HOME), then cross-field rules: every tier names a known gate, every "heavy" names a heavy_jobs slot,
-placeholders are known and bare (never inside quotes), test_db.host is in allow_hosts.
+workflow-profile.schema.json in this checkout, else in $WH: $WORKFLOW_HOME, else
+~/.claude/workflow-release, else the repo ~/.claude/commands points into), then cross-field rules:
+every tier names a known gate, every "heavy" names a heavy_jobs slot, placeholders are known and
+bare (never inside quotes), test_db.host is in allow_hosts, an agent gate (kind "agent") names its
+"verifier" and every other gate has a "cmd", and no tier lists a gate whose cmd is
+commands.test_full (the full run is never a tier gate).
+Warnings (printed, exit unchanged): risk_routing without a "reach-walk" gate; a heavy_jobs entry
+without lock_dir (the default is per-user ${'${TMPDIR:-/tmp}'}/workflow-slots/<job>).
 
---smoke runs every gate with "smoke": true and every commands.* entry, each through
+--smoke runs every gate with "smoke": true (never an agent gate: skills launch those) and every
+commands.* entry, each through
 "bash -c '<shell_prefix> <cmd>'" in the project root, and reports each exit code. Placeholders
 come from flags and are shell-quoted, so a value cannot inject shell: --files is split on
 whitespace (or repeated) and each path becomes one quoted word. An entry whose placeholders are
@@ -70,12 +77,16 @@ export function main(argv) {
     die(e.message, 1);
   }
   const errors = checkProfile(profile, schema.schema);
-  const result = { profile: path, schema: schema.path, valid: errors.length === 0, errors, smoke: [] };
+  const warnings = errors.length ? [] : semanticWarnings(profile);
+  const result = { profile: path, schema: schema.path, valid: errors.length === 0, errors, warnings, smoke: [] };
 
   if (flags.smoke && result.valid) {
     const values = Object.fromEntries(PH.map((k) => [k, flags[k]]));
     if (values.files) values.files = values.files.flatMap((f) => f.split(/\s+/)).filter(Boolean);
     let entries = smokeEntries(profile);
+    for (const [name, g] of entriesOf(profile.gates))
+      if (g.kind === 'agent' && (g.smoke === true || flags.only?.includes(`gates.${name}`)))
+        result.smoke.push({ id: `gates.${name}`, cmd: g.cmd || '', status: 'skipped', reason: `agent gate: launched by a skill (verifier ${g.verifier})` });
     if (flags.only?.length) entries = entries.filter((e) => flags.only.includes(e.id));
     const PREP = ['commands.install', 'commands.build'];
     let prep = [];
@@ -116,6 +127,7 @@ export function main(argv) {
     const out = [`profile ${path}`, `schema  ${schema.path}`];
     out.push(result.valid ? 'valid' : `INVALID (${errors.length})`);
     for (const e of errors) out.push(`  - ${e}`);
+    for (const w of warnings) out.push(`WARNING: ${w}`);
     for (const s of result.smoke) {
       const tag = s.status === 'fail' ? `FAIL exit ${s.exit}` : s.status;
       out.push(`  [${tag}] ${s.id}: ${s.cmd}${s.reason ? `  (${s.reason})` : ''}`);

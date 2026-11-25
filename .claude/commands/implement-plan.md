@@ -136,7 +136,10 @@ orchestrator does this.
 Next phase or task, until all are complete.
 
 ### Module end (once, after the last task)
-`tiers.lane_end` once, then `commands.test_lane_end` with `{base}` = your base sha, once. No profile (v1):
+`tiers.lane_end` once, its independent checks at once: `node "$WH/scripts/workflow/run-tier.mjs" lane_end
+--parallel --base <base sha>` (`WH` per `_shared-project-profile.md`; heavy gates take their slot unless
+self-locking; an agent gate it lists is left to your verifier; script absent: each gate in order). Then
+`commands.test_lane_end` with `{base}` = your base sha, once. No profile (v1):
 `test-select --since <base>` once (`_shared-test-selection.md`, which also says when an escalated tier runs).
 
 ---

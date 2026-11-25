@@ -130,6 +130,12 @@ Checklist 5 applies only if `design/wireframes/` or `design/mockups/` exist.
   reporting it.**
 - **Tests:** the lane's or module's lane-end selection once (`commands.test_lane_end`; no profile (v1):
   `test-select --since <base>`), then only what a finding needs.
+- **Gates:** a gate this run executes (a tier the brief names, `tiers.merge` at a batch verifier's merge
+  prep, a gate the plan's §7A names) goes through `run-tier.mjs` or is run as the registry gives it. **An
+  agent gate (`kind: agent`) is launched, not run:** its `verifier` agent type, with `asks` as the task and
+  the output of its read-only helper `cmd` (when it has one) in the prompt, at effort high on
+  `agents.verifier_model`. It passes only when that agent returns PASS; record the verdict and the agent id
+  in the report. A FAIL is a HIGH finding (CRITICAL when the gate guards an invariant).
 
 ### Checklist 1: Implementation (`code-reviewer`)
 FILE EXISTENCE (all planned files) · CODE STRUCTURE (signatures) · PLACEHOLDERS (TODO, FIXME,

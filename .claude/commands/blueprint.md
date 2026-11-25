@@ -142,7 +142,9 @@ reach or permission table (who may call what). Code-level companion to master S7
 1. **Lock.** The central writer marks the contracts LOCKED and records their hashes in the registry's Frozen
    Schema Watch. Module writers and the designer start only after this.
 2. **Reach or permission walk.** When the profile's registry has a `reach-walk` gate (`gates.reach-walk`), run it
-   over the LOCKED reach and permission tables; its output goes to the verifier. A walk found the reach defects
+   over the LOCKED reach and permission tables; its output goes to the verifier. When it is an agent gate
+   (`kind: agent`), launch its `verifier` with its `asks` instead (its helper `cmd`'s output in the prompt)
+   and record the verdict; it passes only on PASS. A walk found the reach defects
    that a reading of the same tables missed. No gate named: the verifier reads the tables (v1).
 3. **Caller list.** When the registry has a `caller-list` gate (`gates.caller-list`), run it for every shared
    symbol a module will modify; the list goes into that module's impl spec §7 so its tests cover the callers.
@@ -276,7 +278,10 @@ Stage Gate Status) is dry-run now, not first at the batch's final.
   one `--only` per `smoke: true` gate the blueprint names. Never `--smoke` without `--only`: it also runs
   every `commands.*` entry, the full test run included. For a gate that is not smoke-safe, check
   without running it: placeholders fillable, every script and path it names exists, every env var it reads is
-  set or documented. Script absent: do the same checks by hand.
+  set or documented. **An agent gate** (`kind: agent`) is never dry-run as a command: check that its
+  `verifier` is an installed agent type (`.claude/agents/` or the session's agent list) and that its helper
+  `cmd`, if any, passes the static checks; it is launched where its tier runs. Script absent: do the same
+  checks by hand.
 - **Without a profile:** dry-run each command as written: the same existence checks, and the cheap static ones
   (a lint, a grep, a journal check) run once on the current head.
 - **A gate that matches nothing is red**, like one that exits non-zero: a grep or selector with an empty match

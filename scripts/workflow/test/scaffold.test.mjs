@@ -73,7 +73,12 @@ test('scaffold --apply creates worktrees, ports, DBs, runs health and smoke; a r
   assert.deepEqual(Object.keys(reg.allocations).sort(), ['4400', '4401', '4402', '4403', '4404']);
   assert.equal(reg.allocations['4400'].lane, 'A');
   assert.equal(reg.allocations['4401'].seeded, true);
-  assert.equal(readFileSync(join(d, 'db.log'), 'utf8'), 'create app_demo_a_test\nboot postgresql://127.0.0.1:5432/app_demo_a_test\n');
+  assert.equal(
+    readFileSync(join(d, 'db.log'), 'utf8'),
+    'create app_demo_a_test\nboot postgresql://127.0.0.1:5432/app_demo_a_test\ncreate app_demo_int_test\nboot postgresql://127.0.0.1:5432/app_demo_int_test\n',
+    'the lane DB, then the integration DB',
+  );
+  assert.match(r.out, /Integration test DB: app_demo_int_test \(postgresql:\/\/127\.0\.0\.1:5432\/app_demo_int_test\)/);
   assert.equal(readFileSync(join(repo, '..', 'health.log'), 'utf8'), 'healthy\n');
   assert.equal(readFileSync(join(d, 'wt', 'demo-a', '.lane', 'smoke.txt'), 'utf8'), 'lane=a port=4400\n');
   assert.equal(sh(join(d, 'wt', 'demo-a'), 'git status --porcelain', d), '', '.lane/ is excluded');
@@ -217,4 +222,53 @@ test('scaffold smoke: runs in the first lane that has a test DB, and a health ga
   const r2 = run('scaffold.mjs', ['--lane-map', onlyNoDb, '--repo', repo], { home: d });
   assert.equal(r2.code, 0, r2.out + r2.err);
   assert.match(r2.out, /commands\.test_task: needs a lane with a test DB; not smoke-run/);
+});
+
+test('scaffold --task-list refuses (exit 2) a lane whose waits_on names a lane not MERGED; --lanes scaffolds a wave', async (t) => {
+  const { d, repo } = fixture(t);
+  const { TEMPLATE } = await import('./tasklist-fixture.mjs');
+  const map = write(join(d, 'wave.json'), {
+    set: 'demo',
+    base: 'main',
+    worktree_root: '../wt',
+    lanes: [
+      { lane: 'C0', waits_on: [], ports: [] },
+      { lane: 'A', waits_on: ['C0'], ports: [] },
+      { lane: 'B', waits_on: ['C0', 'A'], ports: [] },
+    ],
+  });
+  const plan = (rows) =>
+    TEMPLATE.replace('| C0 | Phase 0: LOCKED contracts + stubs | — | 1 | ⏳ |\n| C0-UI | shared UI foundation | C0 | 2 | ⏳ |', rows.join('\n'));
+  const tl = write(join(d, 'tl.md'), plan(['| C0 | contracts | — | 1 | ✅ MERGED (abc123) |', '| A | M1 | C0 | 2 | 🔄 |', '| B | M2 | C0, A | 3 | ⏳ |']));
+  const all = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--task-list', tl, '--skip-smoke'], { home: d });
+  assert.equal(all.code, 2, all.out + all.err);
+  assert.match(all.err, /B waits on A/);
+  assert.doesNotMatch(all.err, /A waits on/);
+  const wave = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--task-list', tl, '--lanes', 'A', '--skip-smoke'], { home: d });
+  assert.equal(wave.code, 0, wave.out + wave.err);
+  assert.match(wave.out, /\| A \| lane\/demo-a \|/);
+  assert.doesNotMatch(wave.out, /\| B \|/);
+  // the Module status table counts too: every row of the lane merged
+  const tl2 = write(join(d, 'tl2.md'), plan(['| C0 | contracts | — | 1 | ✅ |', '| A | M1 | C0 | 2 | 🔎 |']).replace(
+    '| Module | Lane | Status | Verify (sweeps) | UI parity | Commits | Notes |\n|---|---|---|---|---|---|---|',
+    '| Module | Lane | Status | Verify (sweeps) | UI parity | Commits | Notes |\n|---|---|---|---|---|---|---|\n| M0 | C0 | ✅ MERGED (abc) | 1 | — | 3 | |\n| M1 | A | ✅ MERGED (def) | 1 | — | 2 | |',
+  ));
+  assert.equal(run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--task-list', tl2, '--skip-smoke'], { home: d }).code, 0);
+  assert.equal(run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--lanes', 'Z'], { home: d }).code, 2);
+});
+
+test('scaffold --apply: concurrent scaffolds never hand out one port twice (the registry is locked)', async (t) => {
+  const { d, repo } = fixture(t);
+  const { runAsync } = await import('./helpers.mjs');
+  const maps = ['s1', 's2', 's3'].map((set) =>
+    write(join(d, `${set}.json`), { set, base: 'main', worktree_root: `../wt-${set}`, lanes: [{ lane: 'A', ports: ['api', 'web'] }, { lane: 'B', ports: ['api'] }] }),
+  );
+  const rs = await Promise.all(maps.map((m) => runAsync('scaffold.mjs', ['--lane-map', m, '--repo', repo, '--apply', '--skip-db', '--skip-smoke'], { home: d }).done));
+  for (const r of rs) assert.equal(r.code, 0, r.out + r.err);
+  const reg = JSON.parse(readFileSync(join(repo, '.claude', 'ports.json'), 'utf8'));
+  const mine = Object.entries(reg.allocations).filter(([, a]) => a.set);
+  assert.equal(mine.length, 9, 'three sets x three ports, each recorded once');
+  const used = rs.flatMap((r) => [...r.out.matchAll(/(?:api|web) (\d{4})/g)].map((m) => m[1]));
+  assert.equal(new Set(used).size, used.length, `no port printed twice: ${used.join(' ')}`);
+  assert.ok(!existsSync(join(repo, '.claude', 'ports.json.lock')), 'lock released');
 });
