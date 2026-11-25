@@ -166,7 +166,8 @@ Commit the task list, the lane map and the briefs together (not on `--dry-run`).
 - **Scaffold:** the step 9 command with `--apply` and
   `--smoke-commands typecheck,test_lane_end` (those the profile defines). It creates the worktrees and
   branches, allocates ports from the registry, creates the test DBs through `test_db`, runs the `health`
-  gates, then smoke-runs in the first lane's worktree: `commands.install`, then `commands.build` (always, in
+  gates once, then smoke-runs in the first lane that has a test DB (else the first lane; commands that need a
+  test DB are then listed as not smoke-run): `commands.install`, then `commands.build` (always, in
   a worktree it creates), then the `smoke: true` gates, then the named commands, so the test commands run
   after their test DB exists. Never name `test_full` (it runs once, at the final) or `test_task` (it needs
   `{files}`); run `commands.test_task` yourself once in that worktree with one existing test file. A red is

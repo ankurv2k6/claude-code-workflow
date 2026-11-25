@@ -120,3 +120,11 @@ test('watchdog: a slot holder in <lock_dir>/<n>/pid (no slot- prefix) counts as 
   assert.equal(r.code, 4, r.out + r.err);
   assert.match(JSON.parse(r.out).lanes[0].reason, /holds slot flows\/2/);
 });
+
+test('watchdog: a task list with no Agents table exits 0 (nothing to watch), not a usage error', (t) => {
+  const f = fixture(t);
+  const tl = write(join(f.d, 'context', 'noagents.md'), '---\nset: x\nstatus: in_progress\n---\n\n# Batch progress — x\n\n## Module status\n');
+  const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--once']);
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.match(r.out, /batch not running \(status: no Agents table\)/);
+});

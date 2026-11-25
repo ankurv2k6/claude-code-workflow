@@ -32,7 +32,7 @@ Stall threshold: --stall-minutes, else the task list's stall_minutes, else the p
 limits.stall_minutes, else 45. Slot lock dirs: --lock-dir, plus every heavy_jobs.*.lock_dir of
 the profile (default ${'${TMPDIR:-/tmp}'}/workflow-slots/<job>).
 
-Exit: 0 no lane is running, or the batch is not running · 3 a lane stalled (report on stdout) · 2 usage.
+Exit: 0 no lane is running, the batch is not running, or the task list has no Agents table · 3 a lane stalled (report on stdout) · 2 usage.
 With --once it checks a single time and exits 4 when lanes are running and none is stalled.`;
 
 const mtime = (p) => {
@@ -127,7 +127,8 @@ export function check({ taskList, stallMinutes, profilePath, lockDirs = [] }) {
   const holders = slotHolders([...new Set(dirs)]);
 
   const table = readTable(text, 'Agents');
-  if (!table) throw new Error(`no "## Agents" section in ${taskList}`);
+  // No Agents table means no lane was ever recorded: nothing to watch, which is not a usage error.
+  if (!table) return { at: nowStamp(), batchStatus: 'no Agents table', notRunning: true, stallMinutes: null, running: 0, stalled: 0, lanes: [] };
   const h = table.header;
   const cLane = col(h, /^lane/i);
   const cRole = col(h, /^role/i);

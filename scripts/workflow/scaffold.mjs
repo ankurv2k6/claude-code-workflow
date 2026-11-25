@@ -262,18 +262,26 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
     }
 
   // 4. health gates
+  const healthRan = new Set();
   for (const [name, g] of Object.entries(profile?.gates || {}))
-    if (g?.kind === 'health') steps.push({ step: 'health', what: `${name}: ${g.cmd}`, run: g.cmd, cwd: repo });
+    if (g?.kind === 'health') {
+      healthRan.add(name);
+      steps.push({ step: 'health', what: `${name}: ${g.cmd}`, run: g.cmd, cwd: repo });
+    }
 
   // 5. smoke: in a fresh worktree, install and build come first, so the gates see a built tree
   if (!skipSmoke && profile) {
-    const l = lanes[0];
+    // Smoke in a lane that has a test DB, so commands needing {url} or {name} can render; else the first lane.
+    const l = lanes.find((x) => x.db) || lanes[0];
     const v = { lane: laneToken(l.lane), set: laneToken(set), base: l.base, port: Object.values(l.portMap)[0], name: l.db?.name, url: l.db?.url };
     const cmds = Object.entries(profile.commands || {}).filter(([k, c]) => k !== 'notes' && typeof c === 'string');
     const smokeCmd = (k, c, prep) => {
       const f = fill(c, v);
       const missing = f.missing.filter((m) => m !== 'files');
-      if (missing.length) steps.push({ step: 'smoke', what: `commands.${k}: unfilled {${missing.join('}, {')}}`, error: true });
+      const needsDb = missing.every((m) => m === 'url' || m === 'name');
+      if (missing.length && needsDb && !l.db && !smokeCommands.includes(k))
+        steps.push({ step: 'smoke', what: `commands.${k}: needs a lane with a test DB; not smoke-run`, skip: true });
+      else if (missing.length) steps.push({ step: 'smoke', what: `commands.${k}: unfilled {${missing.join('}, {')}}`, error: true });
       else if (prep || smokeCommands.includes(k)) steps.push({ step: 'smoke', what: `commands.${k}: ${f.cmd}`, run: f.cmd, cwd: l.worktree, prep: !!prep, after: !prep });
       else steps.push({ step: 'smoke', what: `commands.${k}: renders`, skip: true });
     };
@@ -283,7 +291,7 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
       if (typeof c === 'string') smokeCmd(k, c, l.fresh || smokeCommands.includes(k));
     }
     for (const [name, g] of Object.entries(profile.gates || {})) {
-      if (g?.smoke !== true) continue;
+      if (g?.smoke !== true || healthRan.has(name)) continue; // a health gate already ran in step 4
       const f = fill(g.cmd, v);
       if (f.missing.length) steps.push({ step: 'smoke', what: `gates.${name}: unfilled {${f.missing.join('}, {')}}`, error: true });
       else steps.push({ step: 'smoke', what: `gates.${name}: ${f.cmd}`, run: f.cmd, cwd: l.worktree, after: true });

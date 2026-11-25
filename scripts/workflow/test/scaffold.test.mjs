@@ -186,3 +186,35 @@ test('scaffold test DB: {url} renders from test_db.url, credentials included', (
   assert.equal(r.code, 0, r.out + r.err);
   assert.match(r.out, /\[would\] test-db A: echo boot 'postgresql:\/\/app:secret@127\.0\.0\.1:5432\/app_demo_a_test\?sslmode=disable'/);
 });
+
+test('scaffold smoke: runs in the first lane that has a test DB, and a health gate runs once', (t) => {
+  const { d, repo } = fixture(t);
+  editProfile(repo, (p) => {
+    p.commands.test_task = 'echo test {url} {files}';
+    p.gates['db-up'].smoke = true;
+  });
+  sh(repo, 'git commit -qam smoke-db', d);
+  // the first lane has no test DB (a cross-cutting lane); the second has one
+  const map = write(join(d, 'lanes-nodb-first.json'), {
+    set: 'demo',
+    base: 'main',
+    worktree_root: '../wt',
+    lanes: [
+      { lane: 'P', ports: ['api'], test_db: false },
+      { lane: 'A', ports: ['api'] },
+    ],
+  });
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo], { home: d });
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.out, /unfilled \{url\}/, r.out);
+  assert.equal((r.out.match(/db-up:/g) || []).length, 1, `health gate listed once:\n${r.out}`);
+  const onlyNoDb = write(join(d, 'lanes-nodb-only.json'), {
+    set: 'demo',
+    base: 'main',
+    worktree_root: '../wt',
+    lanes: [{ lane: 'P', ports: ['api'], test_db: false }],
+  });
+  const r2 = run('scaffold.mjs', ['--lane-map', onlyNoDb, '--repo', repo], { home: d });
+  assert.equal(r2.code, 0, r2.out + r2.err);
+  assert.match(r2.out, /commands\.test_task: needs a lane with a test DB; not smoke-run/);
+});
