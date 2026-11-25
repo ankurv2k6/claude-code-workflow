@@ -68,6 +68,7 @@ test('run-tier: a heavy gate takes a slot unless its job is self-locking; an age
   assert.match(r.out, /\[pass\] self .*\[self-locking\]/);
   assert.match(r.out, /\[agent\] review → launch code-reviewer: Review it\. \(helper output .*tier-cut_end-review-helper\.log\)/);
   assert.match(r.out, /1 agent gate\(s\) to launch/);
+  assert.match(r.out, /AGENT GATES PENDING/);
   assert.equal(readFileSync(join(root, 'logs', 'tier-cut_end-review-helper.log'), 'utf8'), 'changed-files abc\n');
   assert.ok(!existsSync(join(shared, 'slot-1')), 'slot released');
 });

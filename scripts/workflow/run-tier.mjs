@@ -93,7 +93,7 @@ export async function main(argv) {
       out.push(`  ${stepLine(s)}${s.status === 'would-run' ? `: ${s.cmd}` : ''}`);
       if (s.tail) out.push(...s.tail.split('\n').map((l) => `      ${l}`));
     }
-    out.push(`${code === 0 ? 'GREEN' : code === 75 ? 'NOT RUN (slot timeout)' : 'RED'}: ${tierLine(steps)}${agents.length ? ` · ${agents.length} agent gate(s) to launch` : ''}`);
+    out.push(`${code === 0 ? (agents.length ? 'SCRIPTS GREEN, AGENT GATES PENDING' : 'GREEN') : code === 75 ? 'NOT RUN (slot timeout)' : 'RED'}: ${tierLine(steps)}${agents.length ? ` · ${agents.length} agent gate(s) to launch; the tier is green only when each returns PASS` : ''}`);
     process.stdout.write(`${out.join('\n')}\n`);
   }
   return code;

@@ -7,7 +7,7 @@ facts (commands, hosts, data rules) belong in each project's CLAUDE.md and workf
 ## Approvals
 
 - **Pushes and deploys need my approval, each time.** Never push a branch that deploys, open a release, or
-  run a deploy without my explicit yes for that specific push or deploy. Feature branches may be pushed.
+  run a deploy without my explicit yes for that specific push or deploy.
 - **Ask only at two points:** after a plan, and before a deploy. Everything else: take the documented
   default, record it, and list it for me as an owner item.
 

@@ -32,7 +32,8 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
 | A verify sweep | its own fixes' delta; the callers' tests of any shared code it changed; the lane's `commands.test_lane_end` once | the verifier |
 | Merge into the integration branch | `tiers.merge` through `merge-lane.mjs`, skipped when the verifier ran it green on the lane head that merged | the orchestrator |
 | End of a cut | `tiers.cut_end` (invariant gates first), the combined final, its fixes merged, then `commands.test_full` once (never a tier gate) | the orchestrator |
-| Merge between tracks, or before a release | `tiers.track_merge` | the orchestrator |
+| Routine re-merge between tracks | `tiers.merge` | the orchestrator |
+| Track-merge milestone (a finished cut into the mainline), or before a release | `tiers.track_merge` | the orchestrator |
 
 - **A tier runs through `"$WH/scripts/workflow/run-tier.mjs" <tier>`** (`WH` per
   `_shared-project-profile.md`; `--parallel` runs its independent `check` gates at once): the gates in order,

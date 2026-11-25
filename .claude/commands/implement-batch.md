@@ -312,8 +312,9 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
    their slot, so an invariant break surfaces while lanes are still running, not at the final. A red is a
    CRITICAL for the lane that brought it. They run again at the final.
 
-**Merges between tracks** (one track's integration branch into another, or into the mainline): run
-`tiers.track_merge` once on the merged head.
+**Merges between tracks:** a routine re-merge of one track's integration branch into another (to keep shared
+files in step) runs `tiers.merge` only. `tiers.track_merge` runs once at a track-merge **milestone**: a track's
+finished cut merging into the mainline, or before a release.
 
 ### 6. Failures
 - **A lane agent dies or errors:** run the resume procedure (message first, then relaunch from its brief),
