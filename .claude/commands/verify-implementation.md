@@ -1,696 +1,378 @@
 ---
-description: Verify an implementation against its plan or module blueprint by running the code as well as reading it. Fixes CRITICAL, HIGH and normal-use findings and logs the rest, within 2 sweeps. 2 agents by default, 7 with --deep. Supports the three-layer blueprint system.
+description: Verify an implementation against its plan or module blueprint by running the code as well as reading it, focused on the delta, its callers and the project profile's risk routes. Fixes CRITICAL, HIGH and normal-use findings and logs the rest, within 2 sweeps. 2 agents by default, 7 with --deep. Supports the three-layer blueprint system.
 ---
 # Verify Implementation Command
 
-Verify implementation against the **current session's module** with gap analysis, logging/testing audit, and **automated remediation**. Detects module from session context (TodoWrite, recent commands) first, then falls back to status file. Use `--all` to verify all implemented modules. Supports standalone plans and three-layer blueprint system.
+Verify the **current session's module** against its plan: gap analysis, a logging and testing audit, and
+**automated remediation**. The module comes from session context first (TodoWrite, recent commands), then the
+status file. `--all` verifies every implemented module. Supports standalone plans and the three-layer
+blueprint system.
 
 ## Arguments
-- `$ARGUMENTS` - Path to plan file, or keywords: `logging`, `testing`, `gaps`, `stubs`
-- `--force` - Force thorough verification even if module/plan is marked as completed in tracking documents
-- `--all` - Verify ALL implemented modules (scans `context/implementation-status.md` for completed modules). Without this flag, only the current/active module is verified.
-- `--stubs` - Focus mode: run ONLY Agent 6 (Stub/Placeholder Detection). Skips Agents 1-5. Still runs Phases 3-8 for consolidation and remediation.
-- `--status [module]` - Query-only mode. Reads `context/implementation-status.md` and registry. Displays stub verification status per module or all modules. Runs NO agents. When `--status` is active, all other flags (`--force`, `--stubs`, `--all`, `--deep`) are ignored. Without a module argument, defaults to ALL. Validate module ID against `/^M\d{1,3}[a-z]?$/` (and the registry's module list) or literal `ALL`. Reject invalid values with: `Invalid module ID: {input}. Use a module ID from the registry or ALL.`
-- `--skip-stub-gate` - When passed through from implement-plan or implement-batch, stub gate results are reported but do not block completion. **Not recommended** — available as escape hatch only. Note: This flag is consumed by implement-plan/implement-batch, not verify-implementation itself.
-- `--deep` - Run the 7 specialist agents (one checklist each) instead of the default 2 agents split by file ownership. Use for a final audit, not inside a batch.
+- `$ARGUMENTS`: path to a plan file, or a keyword: `logging`, `testing`, `gaps`, `stubs`.
+- `--force`: verify even if the module or plan is marked complete in the tracking documents.
+- `--all`: verify every implemented module (from `context/implementation-status.md`). Without it, only the
+  current module.
+- `--stubs`: focus mode: only the stub and contract checklists (Agents 6 and 7). Phases 3–7 still run.
+- `--status [module]`: query only (Phase 1.5); runs no agents and ignores every other flag. Default `ALL`.
+  The module must match `/^M\d{1,3}[a-z]?$/` and the registry, or be `ALL`; otherwise reject with
+  `Invalid module ID: {input}. Use a module ID from the registry or ALL.`
+- `--skip-stub-gate`: consumed by `/implement-plan` and `/implement-batch`: stub gate results are reported
+  but do not block. **Not recommended.**
+- `--deep`: the 7 specialist agents (one checklist each) instead of the default 2. For a final audit, not
+  inside a batch.
 
-Use TodoWrite. **Launch the Phase 2 agents in one message. Fix CRITICAL, HIGH and normal-use findings without asking; log the rest with a reason** (`~/.claude/commands/_shared-triage.md`). **At most 2 sweeps:** this run is sweep 1; sweep 2 re-checks only the fixes (Phase 7).
+Use TodoWrite. **Launch the Phase 2 agents in one message. Fix CRITICAL, HIGH and normal-use findings
+without asking; log the rest with a reason** (`_shared-triage.md`). **At most 2 sweeps:** this run is
+sweep 1; sweep 2 re-checks only the fixes (Phase 6).
 
-**Shared protocols:** `_shared-triage.md` (what blocks, how a verifier works), `_shared-ui-parity.md`, `_shared-test-selection.md`, `_shared-effort-budget.md`, `_shared-agent-timeout.md`, `_shared-commit-protocol.md` (all in `~/.claude/commands/`).
+**Shared protocols** (`~/.claude/commands/`): `_shared-triage.md` (what blocks, how a verifier focuses),
+`_shared-project-profile.md`, `_shared-ui-parity.md`, `_shared-test-selection.md`, `_shared-effort-budget.md`,
+`_shared-agent-timeout.md`, `_shared-commit-protocol.md`.
+
+**The profile.** If `.claude/workflow-profile.json` exists, its `commands.*`, `risk_routing` and
+`agents.verifier_model` apply below. **No profile (v1):** the steps marked so replace them.
 
 ---
 
 ## Phase 1: Plan Discovery
 
-1. **Detect Flags**:
-   - If `--force` in arguments: Set `FORCE_MODE=true` — ignore completion status in `context/implementation-status.md`, registry stage gates, and plan progress markers. Treat ALL items as requiring verification.
-   - If `--all` in arguments: Set `ALL_MODE=true` — verify all implemented modules (see step 2b).
-   - If `--stubs` in arguments OR bare `stubs` keyword: Set `STUBS_FOCUS=true` — run ONLY Agent 6 (Stub Scanner), skip Agents 1-5.
-   - If `--status` in arguments: Set `STATUS_QUERY=true`, `STATUS_MODULE=<module-arg>|ALL` (default ALL if no module arg). Validate STATUS_MODULE against `/^M\d{1,3}[a-z]?$/` (and the registry's module list) or literal `ALL`. If invalid: reject with `Invalid module ID: {input}. Use a module ID from the registry or ALL.` **Short-circuit to Phase 1.5** — all other flags are ignored.
-   - If `--deep` in arguments: Set `DEEP_MODE=true` — Phase 2 runs the 7 specialist agents.
-   - **On a lane branch** (a batch worktree, or any branch behind its integration branch): merge the integration branch in first and verify the result — verify what will merge (`_shared-triage.md`).
+1. **Flags:** `FORCE_MODE` (`--force`: ignore completion markers in the status file, registry gates and
+   plan progress), `ALL_MODE` (`--all`), `STUBS_FOCUS` (`--stubs` or `stubs`), `STATUS_QUERY` (`--status`:
+   validate the module, then go straight to Phase 1.5), `DEEP_MODE` (`--deep`).
+   - **On a lane branch** (a batch worktree, or any branch behind its integration branch): merge the
+     integration branch in first and verify the result (`_shared-triage.md`).
 
-2. **Find Plan(s)**:
+2. **Find the plan(s).**
+   - **One module (default):** an explicit path in `$ARGUMENTS`; else, in order: the module named in
+     TodoWrite (in progress or just completed); a recent `/implement-plan` or `/blueprint` call in this
+     conversation; the one `🔨 IN PROGRESS` module in `context/implementation-status.md` (several: ask
+     which, or `--all`); else the most recently modified plan, with the warning "⚠️ Using most recently
+     modified plan [name]. If working on a different module, specify it explicitly." Nothing found: ask
+     for a plan or `--all`. Session context wins over modification time, since modules run in parallel.
+   - **`--all`:** every module `✅ COMPLETE` or `🔨 IN PROGRESS` in the status file, each with its plan
+     (`context/blueprints/blprnt-M*.md` or `context/plans/*.md`), verified in turn. Print
+     `VERIFYING ALL: X modules found`.
 
-   **2a. Default (single module — no `--all`):**
-   - If explicit path in `$ARGUMENTS`: Use that file directly
-   - Else detect **current session's module** (order of precedence):
-     1. **Session context** (HIGHEST PRIORITY): Check TodoWrite todos for module references (e.g., "Implementing M2", "blprnt-M3"). Extract module ID from in_progress or recent completed todos.
-     2. **Session history**: Look for recent `/implement-plan` or `/blueprint` invocations in current conversation that specify a module.
-     3. **Status file (single match)**: Read `context/implementation-status.md` — if EXACTLY ONE module has status `🔨 IN PROGRESS`, use that module.
-     4. **Status file (multiple matches)**: If MULTIPLE modules are `🔨 IN PROGRESS`, prompt user: "Multiple modules in progress: [list]. Specify which module to verify or use `--all`."
-     5. **Fallback with warning**: If no session context and no in-progress modules, use most recently modified plan BUT display warning: "⚠️ Using most recently modified plan [name]. If working on a different module, specify it explicitly."
-     6. If still none found, prompt user: "No active module detected. Specify a plan file or use `--all` to verify all completed modules."
+3. **Blueprint system** (`blprnt-*.md`): `BLUEPRINT_MODE=true`. Load §7 Verification Playbook, the registry,
+   the `impl-contracts` sections the module produces or consumes, and the impl spec §2 File Map, by anchor.
 
-   **Note**: Session context takes precedence over file modification time because multiple modules may be implemented in parallel across different sessions.
+4. **Completion check** (skip with `FORCE_MODE`): a module marked `✅ COMPLETE`, a registry gate at
+   `PRODUCTION`, or a plan with every phase `[x]` → "Module marked complete. Use `--force` to verify anyway."
 
-   **2b. All modules (`--all` flag):**
-   - Read `context/implementation-status.md` — collect ALL modules with status `✅ COMPLETE` or `🔨 IN PROGRESS`
-   - For each module, locate its plan file (`context/blueprints/blprnt-M*.md` or `context/plans/*.md`)
-   - Queue all found plans for sequential verification
-   - Output: `VERIFYING ALL: X modules found`
+5. **Parse the plan:** phases, features, expected files, endpoints, components, integration points; in
+   blueprint mode also §7A checks, §7C integration checks and §12 pre-flight. `FORCE_MODE` re-verifies
+   every item whatever its markers.
 
-3. **Detect Blueprint System** (if `blprnt-*.md`):
-   - Set `BLUEPRINT_MODE=true`
-   - Load §7 Verification Playbook, registry, impl-contracts.md, impl spec §2 File Map
+6. **The risk focus** (`_shared-triage.md`):
+   - **the delta:** `git diff --name-only <base>...HEAD` (base: the lane's base, or the plan's start
+     commit), plus **its callers**: the files that import or call what changed;
+   - **the focus list:** each `risk_routing` route whose `paths` match a changed file adds its `reason`,
+     and its `verifier` as the agent type for the checklist it covers. No profile (v1): the module's
+     invariants, its screens with the most states, new routes and new cross-package dependencies.
 
-4. **Check Completion Status** (skip if `FORCE_MODE=true`):
-   - Read `context/implementation-status.md` — if module marked `✅ COMPLETE`, prompt: "Module marked complete. Use `--force` to verify anyway."
-   - Blueprint mode: Check registry stage gate — if `PRODUCTION`, prompt similarly
-   - Standard mode: Check plan `## Implementation Progress` — if all phases `[x]`, prompt similarly
-
-5. **Parse Plan**: Extract phases, features, expected files, endpoints, components, integration points
-   - Blueprint mode: Also extract §7A checks, §7C integration checks, §12 pre-flight
-   - **FORCE_MODE**: Re-verify ALL items regardless of `[x]` markers or completion annotations
-
-6. **Output**: `PLAN: [name] | MODE: [standard/blueprint] | FORCE: [yes/no] | ALL: [yes/no] | PHASES: X | REQUIREMENTS: Y | FILES: Z`
+7. **Output:** `PLAN: [name] | MODE: [standard/blueprint] | FORCE | ALL | PHASES: X | REQUIREMENTS: Y |
+   FILES: Z | DELTA: N files, M callers | FOCUS: [reasons]`
 
 ---
 
-## Phase 1.5: Status Query (if `STATUS_QUERY=true`)
+## Phase 1.5: Status Query (`STATUS_QUERY` only; then exit)
 
-**Short-circuit**: If `STATUS_QUERY=true`, execute this phase and EXIT immediately. No Phase 2-8.
+Read `context/implementation-status.md` and, in blueprint mode, the registry's `## Stub/Placeholder
+Tracking`. No status file, or unparseable: `No modules tracked yet. Run /implement-plan to start.` A row
+without a `Stub Gate` column shows `UNKNOWN`, never PASSED.
 
-### Read Status Sources
-- Always: `context/implementation-status.md`
-- If blueprint mode: registry `## Stub/Placeholder Tracking` section
-- **Non-blueprint fallback**: If no registry exists, read only from `implementation-status.md`
-- **File missing**: If `implementation-status.md` does not exist or is unparseable, display: `No modules tracked yet. Run /implement-plan to start.` and exit.
-- **Unknown column**: If a module row lacks a `Stub Gate` column, display `UNKNOWN` (not PASSED)
-
-### For a Specific Module (`--status M3`)
-Display:
+One module (`--status M3`):
 ```
 MODULE STATUS: M3 ({module name})
-==================================
-Implementation: {status from status file}
-Stub Gate: {PASSED / FAILED / PENDING / UNKNOWN}
-Last Scanned: {timestamp}
-
-Stub Inventory:
-  Actionable: {count} — stubs that can be fixed now
-  Blocked: {count} — stubs awaiting upstream modules
-  MVP (Intentional): {count} — OUT-* tagged, never remediated
-
-{If actionable > 0:}
-Actionable Stubs:
-  [STUB-ID] [category] [file:line] — [description]
-  ...
-
-{If blocked > 0:}
-Blocked Stubs:
-  [STUB-ID] [category] [file:line] — Blocked by M[N] ({upstream status})
-  ...
+Implementation: {status} | Stub Gate: {PASSED/FAILED/PENDING/UNKNOWN} | Last Scanned: {timestamp}
+Stubs: Actionable {n} (fixable now) | Blocked {n} (awaiting upstream) | MVP {n} (OUT-*, never remediated)
+  [STUB-ID] [category] [file:line] — [description | Blocked by M[N] ({upstream status})]
 ```
 
-### For ALL Modules (`--status` or `--status ALL`)
-Display:
+All modules (`--status` or `--status ALL`):
 ```
-MODULE STUB GATE STATUS
-========================
 | M-ID | Module | Impl Status | Stub Gate | Actionable | Blocked | MVP |
-|------|--------|-------------|-----------|------------|---------|-----|
-| M1 | ... | ✅ COMPLETE | PASSED | 0 | 0 | 1 |
-| M3 | ... | ✅ COMPLETE | FAILED | 2 | 1 | 0 |
-...
-
 COMPLETE-IMPLEMENTATION STUB GATE: {PASSED / FAILED / NOT RUN}
-
-{If any blocked stubs have actionable upstreams:}
-⚠️ N blocked stubs have actionable upstreams — run --stubs --all --force to resolve
-
-BLOCKED STUB DEPENDENCIES:
+⚠️ N blocked stubs have actionable upstreams — run --stubs --all --force to resolve   (when any)
 | STUB ID | Module | Blocked By | Upstream Status | Reclassifiable |
-| ... | ... | M[N] | COMPLETE/PENDING | Yes/No |
 ```
 
-### Log and Exit
-```
-Log: { event: 'STATUS_QUERY', module: STATUS_MODULE, source: 'implementation-status.md', timestamp }
-```
-Exit immediately — no Phase 2-8.
+Log `{ event: 'STATUS_QUERY', module, source: 'implementation-status.md', timestamp }` and exit.
 
 ---
 
 ## Phase 2: Analysis agents
 
-**Default: 2 agents, split by file ownership** (`_shared-effort-budget.md`: never several agents over the same files). Each runs the checklists of the specialist agents below that fall in its half:
+**Default: 2 agents, split by file ownership** (`_shared-effort-budget.md`: never several agents over the
+same files). Each runs the checklists below that fall in its half:
 
 | Agent | Owns | Runs the checklists of |
 |---|---|---|
-| **A — code** | source files, contracts, stubs | Agent 1 (implementation), Agent 6 (stubs), Agent 7 (contracts) |
-| **B — behaviour** | tests, runtime, UI | Agent 3 (testing), Agent 4 (security), Agent 2 (logging), Agent 5 (UI parity) |
+| **A — code** | source files, contracts, stubs | 1 (implementation), 6 (stubs), 7 (contracts), and 4 (security) for code paths |
+| **B — behaviour** | tests, runtime, UI | 3 (testing), 2 (logging), 5 (UI parity), and 4 (security) for one real request per route access class |
 
-**`DEEP_MODE`:** launch the 7 specialist agents instead, one checklist each.
-**`STUBS_FOCUS`:** launch only Agent A, limited to the Agent 6 and Agent 7 checklists.
-**Agent 5's checklist** applies only if `design/wireframes/` or `design/mockups/` exist.
+`DEEP_MODE`: the 7 specialist agents, one checklist each. `STUBS_FOCUS`: Agent A only, checklists 6 and 7.
+Checklist 5 applies only if `design/wireframes/` or `design/mockups/` exist.
 
 **Configuration:**
-- Launch in one message, in the background, at effort `high` (role "Independent verifier"; a project or
-  user rule overrides). No turn caps.
+- Launch in one message, in the background, at effort `high` and model `agents.verifier_model` (default
+  `opus`; role "Independent verifier"). A focus-list route with its own `verifier` type replaces the default
+  agent type for the half its paths fall in. No turn caps.
+- **Each brief starts with the risk focus** (Phase 1 step 6): the delta and its callers first, then the
+  focus list, then the module's remaining requirements. Spend effort on what the implementer's tests did
+  not cover.
 - Each agent writes its full findings to `context/scratch/verify-<agent>-[timestamp].md` and returns at
-  most 30 lines.
-- **Run the code as well as reading it** (`_shared-triage.md`):
-  - Agent B drives the UI in a real browser (`_shared-ui-parity.md`);
-  - it calls each external network path once against a real local socket;
-  - it sends one real request per route access class.
-- **Check a claim by running it before reporting it.**
+  most `limits.handback_lines` (default 30) lines under the headings in `_shared-triage.md`.
+- **Run the code as well as reading it:** B drives the UI in a real browser on the real stack
+  (`_shared-ui-parity.md`, the one parity pass), calls each external network path once against a real local
+  socket, and sends one real request per route access class. **Check a claim by running it before
+  reporting it.**
+- **Tests:** the lane's or module's lane-end selection once (`commands.test_lane_end`; no profile (v1):
+  `test-select --since <base>`), then only what a finding needs.
 
-### Agent 1: Implementation Verification
-```
-subagent_type: "code-reviewer"
-Verify: FILE EXISTENCE (all planned files exist) | CODE STRUCTURE (functions/classes with correct signatures) |
-PLACEHOLDERS (TODO, FIXME, NotImplemented) | INTEGRATIONS (data flow between components) |
-COMPLETENESS (core logic, error handling, validation, return types)
-Blueprint adds: CONTRACT VERIFICATION (interface shapes match impl-contracts.md) |
-FROZEN SCHEMA CHECK (LOCKED contracts unchanged - CRITICAL if mismatch)
-FORCE_MODE: Re-verify ALL features including those marked complete — ignore [x] markers, ✅ annotations, COMPLETE status
-Output: Per-feature status (COMPLETE/PARTIAL/MISSING), gaps IMP-*
-```
+### Checklist 1: Implementation (`code-reviewer`)
+FILE EXISTENCE (all planned files) · CODE STRUCTURE (signatures) · PLACEHOLDERS (TODO, FIXME,
+NotImplemented) · INTEGRATIONS (data flow between components) · COMPLETENESS (core logic, error handling,
+validation, return types). Blueprint mode adds CONTRACT VERIFICATION (shapes match `impl-contracts`) and
+FROZEN SCHEMA (a LOCKED contract changed: CRITICAL). Output: per feature COMPLETE / PARTIAL / MISSING; gaps
+`IMP-*`.
 
-### Agent 2: Logging Infrastructure
-```
-subagent_type: "architect-reviewer"  # if not installed in .claude/agents/, use "code-reviewer" (architectural fit)
-Audit: ENTRY POINTS (request/response on all API routes) |
-ERROR PATHS (all try/catch log with context + stack, flag silent swallowing) |
-CRITICAL OPS (DB, external APIs, auth, file system, background jobs) |
-QUALITY (structured format, consistent levels, correlation IDs, no sensitive data)
-Output: Coverage %, gaps LOG-*, security concerns SEC-LOG-*
-```
+### Checklist 2: Logging (`code-reviewer`, architectural fit)
+ENTRY POINTS (request and response on every API route) · ERROR PATHS (every catch logs context and stack; flag
+silent swallowing) · CRITICAL OPS (DB, external APIs, auth, file system, background jobs) · QUALITY
+(structured, consistent levels, correlation ids, no sensitive data). Output: gaps `LOG-*`, `SEC-LOG-*`.
 
-### Agent 3: Testing Infrastructure
-```
-subagent_type: "test-automator"
-Blueprint mode: Run §7A checks, record pass/fail, run §7C integration checks
-Standard: COVERAGE (npm test --coverage, flag <80%) |
-REQUIREMENT-TO-TEST (unit, integration, E2E for each requirement?) |
-QUALITY (meaningful assertions, error/edge cases, mocking) |
-INFRASTRUCTURE (runner, CI, coverage thresholds, test utilities)
-Output: Playbook results (blueprint), coverage %, gaps TEST-*
-```
+### Checklist 3: Testing (`test-automator`)
+Blueprint mode: run §7A and §7C checks, record pass or fail. Standard: REQUIREMENT-TO-TEST (unit,
+integration, E2E per requirement) · QUALITY (meaningful assertions, error and edge cases, mocking) ·
+INFRASTRUCTURE (runner, test map, utilities). Coverage only when the project measures it. Output: playbook
+results, gaps `TEST-*`.
 
-### Agent 4: Security Analysis
-```
-subagent_type: "code-reviewer"
-Audit: INPUT VALIDATION (Zod/schema, injection/XSS prevention) |
-AUTH/AUTHZ (protected routes, session/token handling, rate limiting) |
-SECRETS (no hardcoded, env vars, not logged, .env gitignored) |
-DATA PROTECTION (encryption, PII handling)
-Output: SECURITY STATUS (PASS/CONCERNS), gaps SEC-* with severity
-```
+### Checklist 4: Security (`code-reviewer`, or the focus list's specialist)
+INPUT VALIDATION (schemas; injection and XSS) · AUTH/AUTHZ (protected routes, sessions and tokens, rate
+limits) · SECRETS (none hardcoded or logged; env files ignored) · DATA PROTECTION (encryption, PII). Output:
+PASS / CONCERNS, gaps `SEC-*` with severity.
 
-### Agent 5: UI/Mockup Compliance (if UI_ASSETS_PRESENT)
-```
-subagent_type: "ui-designer"
-**Skip if**: No design/wireframes/ or design/mockups/ directories exist.
+### Checklist 5: UI parity (`ui-designer`; only with design assets)
+Per `_shared-ui-parity.md`, for each screen the module owns and each key state in its mockup's state list:
+screenshot the mockup (`design/mockups/{area}/{screen}.html?state={state}`) and the running app in the same
+state; compare structure, copy, states, missing or extra elements; check that nothing the wireframe's
+Information decisions table omits is shown. Also: theme tokens, not colour literals; the mockup's
+accessibility attributes kept. No browser → `NOT PROVEN` (an `AUDIT-INCOMPLETE` gap), never a pass.
+Gaps: `UI-STRUCT-*`, `UI-STATE-*`, `UI-COPY-*`, `UI-PLACEHOLDER-*` ("Coming soon", "TODO", "Lorem ipsum",
+empty render paths where the wireframe defines a state), `UI-A11Y-*`; `UI-STYLE-*` for a few pixels or a
+shade.
 
-Prove parity in a real browser per ~/.claude/commands/_shared-ui-parity.md:
-  For each screen the module owns, and each key state in its mockup's state list:
-    1. Screenshot the mockup (design/mockups/{Feature}/{screen}.html?state={state}) and the running
-       app in the same state, at 1440×900 unless the project sets another size
-    2. Compare the pair: structure, copy, states, missing or extra elements
-    3. Check the wireframe's Information decisions table: nothing it omits is shown
-  Also: theme tokens, not colour literals; accessibility attributes the mockup carries are preserved.
-  Re-take the implementer's pairs yourself for the main states; don't rely only on theirs.
-  No browser available → UI parity NOT PROVEN (an AUDIT-INCOMPLETE gap), never a pass.
+### Checklist 6: Stubs (`code-reviewer`)
+Scan only the module's files (impl spec §2 File Map, or the plan); `--all` scans every module's.
 
-UI PLACEHOLDERS (HIGH): "Coming soon", "TODO", "Lorem ipsum" in rendered text; empty render paths
-where the wireframe defines a state; colour literals instead of tokens.
+Patterns, by confidence:
+1. **Explicit markers:** TODO, FIXME, HACK, STUB, NotImplemented; "placeholder" or "not (yet) implemented" in
+   comments (not the DOM `placeholder` attribute).
+2. **Structural:** `export {};` as the whole file; functions with empty bodies or that return `{}`, `[]` or
+   `null` without logic; `unknown` with a "when M* is implemented" comment; `_`-prefixed parameters the body
+   ignores; `{ stub: true }` returns.
+3. **Dependency placeholders:** types commented "placeholder until M* delivers"; stub stage registrations
+   or `unknown` shared types whose producer module is COMPLETE.
+4. **UI content placeholders:** Lorem ipsum, "Coming soon", "TODO" in rendered text; empty render returns;
+   placeholder styling.
 
-Output: per screen, match or the differences, with screenshot pair paths; gaps UI-* with severity:
-  UI-STRUCT-*, UI-STATE-*, UI-COPY-*: a difference a user can see (HIGH)
-  UI-PLACEHOLDER-*: placeholder content or styling (HIGH)
-  UI-A11Y-*: accessibility regression (HIGH)
-  UI-STYLE-*: a few pixels of spacing or a shade (LOW, logged)
-```
+Exclude: test files using stub factories for mocks; DOM `placeholder` accesses; intentional no-op
+utilities; comments describing a past stub; `node_modules/`.
 
-### Agent 6: Stub/Placeholder Detection
-```
-subagent_type: "code-reviewer"
+**Truth table** (the single source for severity and actionability; module and upstream status from the
+status file):
 
-**Module-scoped scan**: Only scan files belonging to the current module (use File Map from impl spec §2 or plan).
-If `--all` mode: scan all module files. If `--stubs` mode: Agents 6 AND 7 run (both stub and contract gaps).
-```
+| Stub type | Module status | Upstream status | Severity | Actionable |
+|---|---|---|---|---|
+| STUB-EMPTY | COMPLETE | n/a | CRITICAL | yes |
+| STUB-EMPTY | PENDING / IN_PROGRESS | n/a | LOW | no |
+| STUB-DEP | any | COMPLETE | HIGH | yes |
+| STUB-DEP | any | PENDING, VERIFICATION_FAILED, STUB_GATE_FAILED, FAILED or BLOCKED | LOW | no |
+| STUB-STAGE | COMPLETE | n/a | HIGH | yes |
+| STUB-STAGE | IN_PROGRESS | n/a | MEDIUM | no |
+| STUB-STAGE | PENDING | n/a | LOW | no |
+| STUB-TEST | any | any | MEDIUM | yes |
+| STUB-MVP (`OUT-*`) | any | any | INFO | no, never remediated |
 
-### Agent 7: Contract Compliance (NEW)
-```
-subagent_type: "code-reviewer"
+`actionable` is true only if the stub can be resolved with code available now. Each gap carries
+`actionable`, `blockedBy` (module id or null) and `dependencyStatus`. Summary: `STUB GATE ELIGIBLE: YES` when
+actionable is 0, else `NO`.
 
-**Purpose**: Detect documented-but-unimplemented components by cross-referencing impl-contracts.md
-and SYSTEM-OVERVIEW.md with actual codebase. Catches gaps like "action executor documented but never created".
+### Checklist 7: Contracts (`code-reviewer`)
+Finds documented components that were never built, by checking `impl-contracts` and the architecture
+overview against the code. Only contracts the current module produces; `--all` checks all.
+1. **CONTRACT-MISSING** (CRITICAL): a `Producer: M<n> (<path>)` file that does not exist.
+2. **CONTRACT-MISMATCH** (HIGH): the file exists but its exports differ from the contract (missing exports,
+   wrong signatures, missing properties).
+3. **CONTRACT-UNWIRED** (HIGH): a documented utility exists but its documented consumer never imports or
+   calls it at the documented point.
+4. **DOC-FLOW** (MEDIUM): the architecture overview describes a step in a flow that the code lacks.
 
-**Module-scoped scan**: Only check contracts where `Producer: M[current]` matches current module.
-If `--all` mode: check all contracts. If `--stubs` mode: this agent ALSO runs (contract gaps are stub-adjacent).
+Actionability: a CONTRACT-MISSING for a COMPLETE module is CRITICAL and actionable; for a PENDING module,
+MEDIUM and not actionable. Each gap carries `contractRef`, `expectedPath`, `actionable` and `expectedExports`.
 
-DETECTION PATTERNS:
-
-1. **CONTRACT FILE EXISTENCE** (CRITICAL — documented file never created):
-   - Parse `impl-contracts.md` for `Producer: M[0-9]+ \(([^)]+\.ts)\)` patterns
-   - Extract file path from parentheses (e.g., `core/src/pipeline/action-executor.ts`)
-   - Resolve to `packages/{path}` (handle core/, server/, logger/, llm/, ui/ prefixes)
-   - Check if file EXISTS on disk
-   - If MISSING: `CONTRACT-MISSING-*` (CRITICAL severity)
-
-   Example detection:
-   ```
-   S16: Producer: M4 (core/src/pipeline/action-executor.ts)
-   File: packages/core/src/pipeline/action-executor.ts
-   Status: MISSING
-   Gap: CONTRACT-MISSING-001 — action-executor.ts documented in S16 but never created
-   ```
-
-2. **CONTRACT INTERFACE MISMATCH** (HIGH — file exists but exports differ):
-   - For existing files, parse exported interfaces/types
-   - Compare against contract definitions in impl-contracts.md
-   - Flag missing exports, wrong signatures, missing properties
-   - If MISMATCH: `CONTRACT-MISMATCH-*` (HIGH severity)
-
-3. **ORCHESTRATOR WIRING GAPS** (HIGH — utility not called):
-   - For documented utilities (e.g., "Action Executor between stages 3 & 4"):
-     - Check if orchestrator.ts imports the utility
-     - Check if orchestrator.ts calls the utility at the documented location
-   - If NOT WIRED: `CONTRACT-UNWIRED-*` (HIGH severity)
-
-   Example detection:
-   ```
-   SYSTEM-OVERVIEW.md: "Action Executor (Between Stages 3 & 4)"
-   orchestrator.ts: No import of executeAction, no call between scoring and transition
-   Gap: CONTRACT-UNWIRED-001 — executeAction documented but not called in orchestrator
-   ```
-
-4. **DOCUMENTATION FLOW GAPS** (MEDIUM — SYSTEM-OVERVIEW describes flow not in code):
-   - Parse SYSTEM-OVERVIEW.md "8-Stage Pipeline" diagram
-   - Extract documented utilities/functions between stages
-   - Verify each exists and is called in the flow
-   - If MISSING from flow: `DOC-FLOW-*` (MEDIUM severity)
-
-CROSS-REFERENCE (determines actionability):
-- Read `context/implementation-status.md` for module completion status
-- CONTRACT-MISSING for a COMPLETE module: CRITICAL + actionable=true
-- CONTRACT-MISSING for a PENDING module: MEDIUM + actionable=false (expected)
-
-Output: Contract compliance %, gaps CONTRACT-* with severity:
-  CONTRACT-MISSING-*: Documented file never created (CRITICAL)
-  CONTRACT-MISMATCH-*: Interface shape doesn't match contract (HIGH)
-  CONTRACT-UNWIRED-*: Utility exists but not integrated (HIGH)
-  DOC-FLOW-*: Documentation describes flow not in code (MEDIUM)
-
-Each gap MUST include:
-  - `contractRef`: Section reference (e.g., "S16", "SYSTEM-OVERVIEW §Action Executor")
-  - `expectedPath`: File path from contract
-  - `actionable`: true if module is COMPLETE/IN_PROGRESS, false if PENDING
-  - `expectedExports`: List of interfaces/functions contract defines
-```
-
-### Agent 6: Stub/Placeholder Detection (continued)
-```
-subagent_type: "code-reviewer"
-
-**Module-scoped scan**: Only scan files belonging to the current module (use File Map from impl spec §2 or plan).
-If `--all` mode: scan all module files. If `--stubs` mode: this is the ONLY stub agent that runs (Agent 7 also runs).
-
-DETECTION PATTERNS (scan in order of confidence):
-
-1. **EXPLICIT MARKERS** (High confidence — always flag):
-   - TODO, FIXME, HACK, STUB, NotImplemented in comments or code
-   - "placeholder" in comments (exclude DOM `placeholder` attribute references)
-   - "not implemented" / "not yet implemented"
-
-2. **STRUCTURAL STUBS** (Medium confidence — requires context analysis):
-   - `export {};` as sole file content (empty module)
-   - Functions with empty bodies or that return `{}` / `[]` / `null` without logic
-   - `unknown` type annotations with "when M* is implemented" comments
-   - Parameters prefixed with `_` where the function body ignores them entirely
-   - `{ stub: true }` in return values
-
-3. **DEPENDENCY PLACEHOLDERS** (Cross-reference with status file):
-   - Type definitions commented as "placeholder until M* delivers"
-   - `createStubStage()` registrations where the real module is COMPLETE
-   - `unknown` types in shared interfaces where the producer module is COMPLETE
-
-4. **UI CONTENT PLACEHOLDERS** (if UI module):
-   - Lorem ipsum, "Coming soon", "TODO" in rendered text
-   - Empty render returns (`return null`, `return <></>`)
-   - Hardcoded placeholder styling
-
-CROSS-REFERENCE (CRITICAL — determines severity dynamically):
-- Read `context/implementation-status.md` to get module completion status
-- For each STUB-DEP/STUB-STAGE: check if upstream dependency module is COMPLETE
-  - If COMPLETE → severity = HIGH (should have been replaced)
-  - If PENDING → severity = LOW (expected, track with dependency note)
-- For STUB-MVP (OUT-* tagged) → severity = INFO (intentional, document only)
-- For STUB-EMPTY: CRITICAL if module marked COMPLETE, LOW if PENDING
-
-EXCLUSIONS (do NOT flag):
-- Test files (`__tests__/`) using stub factories for test mocking
-- DOM `placeholder` attribute accesses (e.g., `el.placeholder`, `placeholder: z.string()`)
-- `createNoopLogger()` (intentional utility, not a stub)
-- Comments describing stubs in past tense ("was a stub", "replaced the stub")
-- `node_modules/` directories
-
-ACTIONABLE CLASSIFICATION TRUTH TABLE (single source of truth for severity AND actionable status):
-
-| Stub Type | Module Status | Upstream Status | Severity | Actionable | Notes |
-|-----------|--------------|-----------------|----------|------------|-------|
-| STUB-EMPTY | COMPLETE | n/a | CRITICAL | true | Must implement exports |
-| STUB-EMPTY | PENDING/IN_PROGRESS | n/a | LOW | false | Expected during development |
-| STUB-DEP | any | COMPLETE | HIGH | true | Upstream delivered, replace placeholder |
-| STUB-DEP | any | PENDING | LOW | false | Blocked by upstream |
-| STUB-DEP | any | VERIFICATION_FAILED | LOW | false | Upstream incomplete |
-| STUB-DEP | any | STUB_GATE_FAILED | LOW | false | Upstream stubs unresolved |
-| STUB-DEP | any | TIMEOUT | LOW | false | Upstream incomplete |
-| STUB-DEP | any | FAILED/BLOCKED | LOW | false | Upstream failed |
-| STUB-STAGE | COMPLETE | n/a | HIGH | true | Replace createStubStage() |
-| STUB-STAGE | IN_PROGRESS | n/a | MEDIUM | false | Still implementing |
-| STUB-STAGE | PENDING | n/a | LOW | false | Not started |
-| STUB-TEST | any | any | MEDIUM | true | Should use real types |
-| STUB-MVP | any | any | INFO | false | Intentional (OUT-*), never remediate |
-
-Rule: `actionable=true` if and only if the stub can be resolved with currently-available code.
-Blocked stubs (upstream not COMPLETE) are never actionable at per-module level.
-
-Output: Stub inventory count, gaps STUB-* with severity and dependency tracking:
-  STUB-EMPTY-*: Empty module placeholders (CRITICAL if module COMPLETE, LOW if PENDING)
-  STUB-MVP-*: Intentional MVP stubs (INFO — tracked only, never remediated)
-  STUB-DEP-*: Upstream dependency placeholders (HIGH if upstream COMPLETE, LOW if PENDING)
-  STUB-STAGE-*: Pipeline stage stubs (HIGH if module COMPLETE, MEDIUM if IN PROGRESS)
-  STUB-TEST-*: Test fixture placeholders (MEDIUM, HIGH if coverage below threshold)
-
-Each gap MUST include:
-  - `actionable`: Boolean derived from truth table above
-  - `blockedBy`: Module ID if dependency not yet implemented, or `null` if actionable now
-  - `dependencyStatus`: Current status of upstream module from status file
-
-Summary MUST include: `STUB GATE ELIGIBLE: [YES if Actionable==0 / NO]`
-```
-
-### Completion & fallbacks
-
-See `_shared-agent-timeout.md`: wait for completion notifications, no wall-clock ceilings, detect stalls.
-- **Fallbacks for an agent that fails or returns incomplete**: Implementation → list existing files | Logging → "audit incomplete" | Testing → select per `_shared-test-selection.md`, else run `npm test` directly | Security → "requires manual security review" | UI → "UI mockup compliance requires manual review" | Stubs → run `grep -rn "TODO\|FIXME\|STUB\|NotImplemented" <module-files>` | Contract → run `grep -n "Producer:.*\.ts" impl-contracts.md` and check file existence
+### Completion and fallbacks
+Wait for completion notifications (`_shared-agent-timeout.md`). An agent that fails or returns incomplete
+leaves an `AUDIT-INCOMPLETE-*` gap, and its part falls back to: Implementation → list existing files ·
+Logging → "audit incomplete" · Testing → select per `_shared-test-selection.md` · Security → "requires manual
+security review" · UI → "requires manual review" · Stubs → `grep -rn "TODO\|FIXME\|STUB\|NotImplemented"
+<module-files>` · Contracts → `grep -n "Producer:" impl-contracts*.md` and check each file exists.
 
 ---
 
-## Phase 2b: Persist Agent Findings (Context Checkpoint)
+## Phase 2b: Persist findings
 
-After all agents complete and before consolidation:
-
-1. Write raw agent findings to `context/scratch/verify-scratch-[timestamp].json` (mkdir -p `context/scratch/` if needed):
-   ```json
-   { "plan": "[PLAN_PATH]", "agents": { "implementation": [...], "logging": [...], "testing": [...], "security": [...], "ui": [...], "stubs": [...], "contracts": [...] }, "ts": "[ISO]" }
-   ```
-2. **State is on disk**: if your context is summarized, re-read `context/scratch/verify-scratch-*.json` and the agents' findings files, then continue to Phase 3.
-3. Delete scratch file after Phase 4 completes.
+Write the agents' raw findings to `context/scratch/verify-scratch-[timestamp].json` (`{ plan, agents: {
+implementation, logging, testing, security, ui, stubs, contracts }, ts }`). If your context is summarized,
+re-read it and the agents' findings files, then continue. Delete it after Phase 4.
 
 ---
 
-## Phase 3: Consolidate & Gap Analysis
+## Phase 3: Consolidate
 
-**Handle partial data gracefully if any agent timed out.**
+1. **Agent status:** each failed or incomplete agent adds `AUDIT-INCOMPLETE-<area>` (HIGH: needs manual
+   follow-up); keep its partial results.
+2. **Merge and dedupe** `IMP-*`, `LOG-*`, `TEST-*`, `SEC-*`, `UI-*`, `STUB-*`, `CONTRACT-*`. Flag compound
+   issues (an untested insecure path), but not across an incomplete agent's data.
+3. **Severity:** each checklist's own severity (the stub truth table, the contract classes), then
+   `_shared-triage.md`:
+   - a breach of the project's CRITICAL list is CRITICAL;
+   - `UI-STRUCT`, `UI-STATE`, `UI-COPY`, `UI-PLACEHOLDER` and `UI-A11Y` are HIGH; `UI-STYLE` of 1–3
+     properties is LOW;
+   - anything that breaks normal use is HIGH, whatever its category;
+   - logging and quality gaps, `STUB-TEST` and `DOC-FLOW` are MEDIUM unless they break normal use;
+   - `STUB-MVP` is INFO: tracked, never counted.
 
-1. **Check Agent Status**: Note which agents completed vs timed out
-   - If agent timed out: Add `AUDIT-INCOMPLETE-*` gap for that category
-   - Example: `AUDIT-INCOMPLETE-TEST: Testing agent timed out, manual review required`
-
-2. **Merge Findings**: Collect IMP-*, LOG-*, TEST-*, SEC-*, UI-*, STUB-*, CONTRACT-*; dedupe overlaps
-   - For timed-out agents: Include any partial results captured before timeout
-   - UI-* gaps: UI-STRUCT-*, UI-STYLE-*, UI-STATE-*, UI-A11Y-*, UI-PLACEHOLDER-*
-   - STUB-* gaps: STUB-EMPTY-*, STUB-MVP-*, STUB-DEP-*, STUB-STAGE-*, STUB-TEST-*
-   - CONTRACT-* gaps: CONTRACT-MISSING-*, CONTRACT-MISMATCH-*, CONTRACT-UNWIRED-*, DOC-FLOW-*
-
-3. **Cross-Reference**: Flag compound issues (missing tests for insecure code, etc.)
-   - Skip cross-references involving timed-out agent data (can't verify)
-   - Flag UI gaps with no mockup: "UI-* gap but no mockup reference"
-
-4. **Classify Severity**:
-   - CRITICAL: breaks core/security, **UI-STRUCT-***, **UI-STATE-***, **UI-PLACEHOLDER-***, **STUB-EMPTY-* (module COMPLETE)**, **CONTRACT-MISSING-* (documented file never created)**
-   - HIGH: incomplete/no tests, **UI-STYLE-* (>3 properties)**, UI-A11Y-*, **STUB-DEP-* (upstream COMPLETE)**, **STUB-STAGE-* (module COMPLETE)**, **CONTRACT-MISMATCH-***, **CONTRACT-UNWIRED-***
-   - MEDIUM: logging/quality, **UI-STYLE-* (1-3 properties)**, **STUB-TEST-***, **STUB-STAGE-* (module IN PROGRESS)**, **DOC-FLOW-***
-   - LOW: docs/edge cases, **STUB-EMPTY-* (module PENDING)**, **STUB-DEP-* (upstream PENDING)**
-   - INFO: **STUB-MVP-* (intentional OUT-* stubs — tracked only, never remediated, NOT counted in SIGNIFICANT_GAPS)**
-   - `AUDIT-INCOMPLETE-*` gaps are classified as HIGH (require manual follow-up)
-   - **Then apply `_shared-triage.md`:** any breach of the project's CRITICAL list (CLAUDE.md invariants and hard guardrails) is CRITICAL; anything that breaks normal use is treated as HIGH whatever its category. **SIGNIFICANT_GAPS = CRITICAL + HIGH** — these block. MEDIUM, LOW and edge cases are logged in Deferred findings with a reason and a revisit trigger, not fixed.
-
-5. **Gap Inventory**:
+   **SIGNIFICANT_GAPS = CRITICAL + HIGH**: these block. MEDIUM, LOW and edge cases go to Deferred findings
+   with a reason and a revisit trigger.
+4. **Inventory**, one entry per gap, with a fix order (CRITICAL first; a fix another depends on first):
    ```
    [GAP-ID] SEVERITY: [description]
-     Location: file:line | Plan Ref: Phase X, Item Y | Impact: [what breaks]
-     Fix: [concrete change needed]
+     Location: file:line | Plan Ref: Phase X, Item Y | Impact: [what breaks] | Fix: [concrete change]
+     (stubs) Dependency: M[N] — Status: [COMPLETE/PENDING] | Blocked: [yes/no]
    ```
-   For STUB-* gaps, include additional fields:
-   ```
-   [STUB-DEP-NNN] SEVERITY: [description]
-     Location: file:line | Dependency: M[N] ([name]) — Status: [COMPLETE/PENDING]
-     Fix: [concrete change needed]
-     Blocked: [Yes (M[N] PENDING) / No]
-   ```
-
-6. **Statistics**: `GAPS: X CRITICAL, Y HIGH, Z MEDIUM, W LOW, I INFO (N total)`
-   - INFO gaps (STUB-MVP) are tracked but NOT counted toward SIGNIFICANT_GAPS (which decide the verification PASS)
-   - Include note if any agents timed out: `⚠️ X agent(s) timed out - results may be incomplete`
+5. `GAPS: X CRITICAL, Y HIGH, Z MEDIUM, W LOW, I INFO (N total)`, plus `⚠️ X agent(s) incomplete` when any.
 
 ---
 
-## Phase 4: Remediation Plan
-
-1. **Prioritized Queue**: Sort CRITICAL > HIGH > MEDIUM > LOW; identify dependencies between fixes
-2. **Dependencies Map**: Optimal fix order to avoid rework
-3. **Verification Steps**: Per gap, define test command + expected outcome
-
----
-
-## Phase 5: Verification Report
+## Phase 4: Verification report
 
 ```
 VERIFY-IMPLEMENTATION REPORT
-PLAN: [name] | DATE: [timestamp] | BRANCH: [branch]
-Agents: ✓ Impl ✓ Log ✓ Test ✓ Sec ✓ UI ✓ Stubs [TIMEOUT] Contract
-(If timeouts: "Results may be incomplete. Manual review: [list]")
-
-PLAN COMPLIANCE: Phases X/Y (Z%) | Requirements X/Y (Z%) | Files X/Y
-
-IMPLEMENTATION: [PASS/PARTIAL/FAIL/INCOMPLETE] — Complete: X | Partial: Y | Missing: Z
-LOGGING: [PASS/NEEDS WORK/INCOMPLETE] — Entry: X% | Errors: X% | Critical: X%
-TESTING: [PASS/NEEDS WORK/INCOMPLETE] — Coverage: X% | Requirement coverage: X/Y
-SECURITY: [PASS/CONCERNS/INCOMPLETE] — Vulnerabilities: X critical, Y high
-UI/MOCKUP: [PASS/NEEDS WORK/SKIP/INCOMPLETE] — Compliance: X% | States: X/Y | Placeholders: N
-STUBS: [PASS/NEEDS WORK/INCOMPLETE] — Total: X | Actionable: Y | Blocked: Z | Intentional(MVP): W
-CONTRACT: [PASS/NEEDS WORK/INCOMPLETE] — Missing: X | Mismatch: Y | Unwired: Z | DocFlow: W
-STUB GATE: [PASS (0 actionable) / FAIL (Y actionable remain) / NOT RUN]
-CONTRACT GATE: [PASS (0 missing/unwired) / FAIL (Y gaps remain) / NOT RUN]
-
-GAPS: CRITICAL X | HIGH Y | MEDIUM Z | LOW W | INFO I | TOTAL N
-
+PLAN: [name] | DATE: [timestamp] | BRANCH: [branch] | DELTA: N files, M callers | FOCUS: [reasons]
+Agents: ✓ A (code) ✓ B (behaviour)   (or the 7 with --deep; INCOMPLETE where an agent failed)
+PLAN COMPLIANCE: Phases X/Y | Requirements X/Y | Files X/Y
+IMPLEMENTATION · LOGGING · TESTING · SECURITY · UI · STUBS · CONTRACT: [PASS / NEEDS WORK / INCOMPLETE] each
+STUB GATE: [PASS (0 actionable) / FAIL (n actionable) / NOT RUN] | CONTRACT GATE: [PASS / FAIL / NOT RUN]
+GAPS: CRITICAL X | HIGH Y | MEDIUM Z | LOW W | INFO I
 VERDICT: [READY FOR PR / NOT READY / INCOMPLETE - MANUAL REVIEW REQUIRED]
 ```
 
-**Note**: Use `INCOMPLETE` status for any section where the agent timed out. These sections require manual follow-up before the module can be considered fully verified.
+---
+
+## Phase 5: Remediation
+
+**Proceed autonomously** (`_shared-autonomous.md`). Report when remediation is done.
+
+### Fix order
+1. **CRITICAL**, one at a time: read, fix, test the fix, resolve regressions.
+2. **HIGH and normal-use breaks:** fix directly. A fix agent only for a large, independent fix
+   (`_shared-effort-budget.md`).
+3. **MEDIUM and LOW:** not fixed; logged in Deferred findings with a reason and a revisit trigger.
+4. **INFO** (`STUB-MVP`): tracked only.
+
+### How to fix, by category (once triage says it blocks)
+- **STUB-EMPTY:** implement the exports the impl spec §2 File Map expects.
+- **STUB-DEP:** confirm the upstream is COMPLETE; replace `unknown` and placeholder types with imports of
+  the real ones; typecheck.
+- **STUB-STAGE:** register the real handler instead of the stub; remove it from any stub list; test.
+- **CONTRACT-MISSING:** create the file at the documented path with the contract's exports; wire it into
+  its consumers; typecheck.
+- **CONTRACT-MISMATCH:** make the exports match the contract exactly; update consumers of the old shape.
+- **CONTRACT-UNWIRED:** import and call the utility at the documented point; test.
+- **DOC-FLOW:** decide whether the doc or the code is right, fix the other, and log
+  `DOC-FLOW-NNN: [doc-updated|code-updated] — [reason]`.
+- **Blocked stubs** (upstream not COMPLETE): never fixed; recorded as `Blocked by M[N] (status: PENDING)`.
+
+### Regression guard and validation
+- **A fix to shared code** (a file other modules import) runs its callers' tests too.
+- Tests: `commands.test_task` with the files the fixes changed, in one call. No profile (v1): the selection
+  for those files (`_shared-test-selection.md`); inside a batch, an escalated tier is deferred, not run;
+  standalone, it runs once, here, not per fix.
+- Typecheck (`commands.typecheck`; no profile (v1): `npx tsc --noEmit`) and build. At most 3 attempts per
+  failure.
+
+`REMEDIATION: CRITICAL X/X | HIGH X/Y (Z deferred) | MEDIUM logged | LOW logged | INFO X | BLOCKED Z`
 
 ---
 
-## Phase 6: Automated Remediation
+## Phase 6: Sweep 2 and commit
 
-**Proceed autonomously. Do NOT ask permission.**
-
-See `_shared-autonomous.md`. Scope: ALL remediation fixes. Only report when remediation is complete.
-
-### Fix Order
-1. **CRITICAL** (sequential): Read file, implement fix, run the selection for the fix, resolve regressions
-2. **HIGH and normal-use breaks**: fix directly. Launch a fix agent only for a large, independent fix (`_shared-effort-budget.md`)
-3. **MEDIUM and LOW**: do NOT fix — log each in Deferred findings with a reason and a revisit trigger
-4. **INFO**: Do NOT fix — track only (STUB-MVP intentional stubs)
-
-The per-category rules below say HOW to fix a finding once triage says it blocks. They do not make a MEDIUM finding blocking.
-
-### Stub-Specific Remediation Rules
-
-**STUB-EMPTY** (CRITICAL when module COMPLETE):
-- Read the module's blueprint/impl spec §2 File Map
-- Implement the module's expected exports per spec
-- If module is PENDING: skip (LOW severity, tracked only)
-
-**STUB-DEP** (HIGH when upstream COMPLETE):
-1. Confirm upstream module status in `context/implementation-status.md`
-2. Find the real type/interface in the upstream module's source code
-3. Replace `unknown` with proper type import from the upstream module
-4. Replace placeholder interfaces with imports from the real module
-5. Run `npx tsc --noEmit` to verify type compatibility
-6. If upstream is PENDING: skip fix, record as blocked with dependency note
-
-**STUB-STAGE** (HIGH when module COMPLETE):
-1. Check if the real stage handler exists (e.g., `IntentStageHandler` for `intent` stage)
-2. Import and register the real handler instead of `createStubStage()`
-3. Remove the stage from the `stubStages` array
-4. Run tests to verify handler integration
-
-**STUB-TEST** (MEDIUM):
-1. Update fixture factories to use real types from implemented modules
-2. Replace `() => {}` empty functions with proper mock implementations
-3. Add type annotations to ensure mock shape matches real interface
-
-**STUB-MVP** (INFO — NEVER remediate):
-- Add tracking entry: `[STUB-MVP-NNN] INFO: Tracked — intentional MVP stub (OUT-NN). No action required.`
-
-**CONTRACT-MISSING** (CRITICAL — documented file never created):
-1. Read the contract section from `impl-contracts.md` (e.g., S16 Action Executor Types)
-2. Extract the expected interfaces, types, and exports from the contract
-3. Create the file at the documented path (e.g., `packages/core/src/pipeline/action-executor.ts`)
-4. Implement the contract-defined interfaces and exports
-5. Run `npx tsc --noEmit` to verify type correctness
-6. Wire the new module into its consumers (e.g., orchestrator must import and call executeAction)
-
-**CONTRACT-MISMATCH** (HIGH — interface shape differs from contract):
-1. Read the contract definition from `impl-contracts.md`
-2. Compare with current exports in the file
-3. Update the file to match contract exactly (add missing properties, fix signatures)
-4. Run `npx tsc --noEmit` to verify compatibility
-5. Update any consumers that depend on the old shape
-
-**CONTRACT-UNWIRED** (HIGH — utility exists but not integrated):
-1. Identify where the utility should be called (from documentation)
-2. Add import statement to the consumer file (e.g., orchestrator.ts)
-3. Add the call at the documented location (e.g., "between scoring and transition")
-4. Pass required arguments from context (step, selector, page, logger)
-5. Run tests to verify integration
-
-**DOC-FLOW** (MEDIUM — documentation describes flow not in code):
-1. Determine if documentation or code is correct
-2. If code is authoritative: update documentation to match
-3. If documentation is authoritative: implement missing flow in code
-4. Log decision: `DOC-FLOW-NNN: [doc-updated|code-updated] — [reason]`
-
-**Blocked stubs** (any category, upstream PENDING):
-- Do NOT attempt to fix
-- Record with dependency note: `Blocked by M[N] (status: PENDING). Will be resolved when M[N] is implemented.`
-- These are tracked in status files for future resolution
-
-### Post-Fix Validation
-
-**Tests: follow `_shared-test-selection.md`** — the selection for the files the fixes changed
-(`--files`), once. If the selector escalates and you are inside a batch lane or verifier, do not run the
-escalated tier: run the related tests of the changed files plus the touched suites, and report
-"escalated, deferred". Standalone, an escalated tier runs once, here, not per fix.
-
-```bash
-npx tsc --noEmit
-npm run build 2>/dev/null
-```
-Fix failures (max 3 attempts each).
-
-### Track Progress
-`REMEDIATION: CRITICAL X/X | HIGH X/Y (Z deferred) | MEDIUM X/Y | LOW X/Y | INFO X (tracked) | BLOCKED Z (pending deps)`
-
----
-
-## Phase 7: Post-Fix Verification
-
-1. **Sweep 2 — re-check the fixes only**: verify each fix in place and the code it touched; tests for the delta pass. Do not re-audit the whole module. A CRITICAL or HIGH still open after this is reported as open (VERIFICATION FAILED for the module); a finding seen in both sweeps is logged as architectural. **Stop here** — there is no sweep 3.
-2. **Blueprint Mode Updates**: Stage gate status, regression history, deviation log, contract compliance, frozen schema timestamps
-3. **Commit Fixes** (see `_shared-commit-protocol.md`): Group related fixes, reference gap IDs:
-   ```
-   fix: close verify-implementation gaps [GAP-001, GAP-003]
-   - GAP-001: Added webhook retry logic
-   - GAP-003: Implemented rate limiting
-   ```
-   Blueprint: include updated registry. Do NOT push.
-4. **Final Report**:
+1. **Sweep 2 re-checks the fixes only:** each fix in place, the code it touched, and the delta's tests. No
+   re-audit. A CRITICAL or HIGH still open is reported open (the module's verification FAILS); a finding
+   seen in both sweeps is logged as architectural. **There is no sweep 3.**
+2. **Blueprint mode:** stage gate status, regression history, deviation log, contract compliance, frozen
+   schema timestamps.
+3. **Commit** (`_shared-commit-protocol.md`), grouping related fixes and citing gap ids:
+   `fix: close verify-implementation gaps [GAP-001, GAP-003]`, one line per gap in the body. Blueprint mode
+   includes the registry. Never push.
+4. **Final report:**
    ```
    REMEDIATION REPORT
-   ==================
-   DISCOVERED: N | FIXED: X (Y%) | DEFERRED: Z | BLOCKED: B (pending deps) | TRACKED: T (INFO/MVP)
-   CRITICAL X/X | HIGH X/Y | MEDIUM X/Y | LOW X/Y | INFO X (tracked)
-   STUBS: Total X | Fixed Y | Blocked Z | Intentional(MVP) W
-   VALIDATION: Tests [PASS/FAIL] | Types [PASS/FAIL] | Build [PASS/FAIL]
-   COMMITS: [hashes]
-   BLUEPRINT: Playbook X/Y pass | Contracts X/Y | Schemas X/Y | Registry [YES/NO]
+   DISCOVERED: N | FIXED: X | DEFERRED: Z | BLOCKED: B | TRACKED: T (INFO/MVP)
+   CRITICAL X/X | HIGH X/Y | STUBS: total X, fixed Y, blocked Z, MVP W
+   VALIDATION: Tests [PASS/FAIL] | Types [PASS/FAIL] | Build [PASS/FAIL] | COMMITS: [hashes]
+   BLUEPRINT: Playbook X/Y | Contracts X/Y | Registry [YES/NO]
    VERDICT: [ALL CLOSED / GAPS REMAIN]
    ```
+   As a batch verifier or combined final, the hand-back is this, cut to `limits.handback_lines`, under the
+   headings in `_shared-triage.md`.
 
 ---
 
-## Phase 8: Context Sync
+## Phase 7: Context sync
 
-**Inside a batch lane or as a batch verifier:** update only the plan file and the module blueprint's §11 Deviations; put everything else (status, registry, memory, deferred findings, owner items) in your report — the orchestrator writes shared state (`_shared-agent-tracking.md`). Standalone runs do all the steps below.
+**Inside a batch** (lane verifier or combined final): update only the plan file and the module blueprint's
+§11 Deviations; everything else (status, registry, memory, deferred findings, owner items) goes in the
+hand-back, and the orchestrator writes shared state (`_shared-agent-tracking.md`). Standalone runs do all of:
 
-1. **Update Plan File**: Add verification record to `## Implementation Progress`:
-   ```
-   **Verification**: /verify-implementation [date]
-   - Gaps: X (Y fixed, Z deferred) | Stubs: A (B actionable, C blocked, D MVP) | Tests: [pass/fail] | Coverage: X% | Build: [pass/fail]
-   ```
-   Annotate fixed items: `- [x] Item ✅ (commit: SHA) — gap [GAP-ID] fixed`
+1. **Plan file:** a verification record under `## Implementation Progress`:
+   `**Verification**: /verify-implementation [date] — Gaps X (Y fixed, Z deferred) | Stubs A (B actionable,
+   C blocked, D MVP) | Tests [pass/fail] | Build [pass/fail]`; fixed items annotated
+   `- [x] Item ✅ (commit: SHA) — gap [GAP-ID] fixed`.
+2. **Status file** (if it exists): upsert the module row, with a `Stubs` column (`{N} actionable, {M}
+   blocked, {K} MVP`, zero categories omitted) and a `Stub Gate` column (`PASSED` / `FAILED` / `PENDING` /
+   `UNKNOWN`).
+3. **Registry** (blueprint mode, `context/blueprints/blprnt-registry.md`): frontmatter counts and
+   `last_updated`; the Module Status row (status, gate, tests, files created vs expected, deviations, date);
+   aggregate counts; stage gates passed (command and date); contracts this module produces marked
+   `COMPLETE`, integration verified; a Regression History row; the per-module stub summary
+   (`| M-ID | Module | Total | Actionable | Blocked | MVP | Gate | Last Scanned |`); the Blocked Stub
+   Dependencies table (`| STUB ID | Module | Blocked By | Description | Auto-Resolve When |`), removing
+   stubs whose upstream is now COMPLETE.
+4. **Architecture document** (`docs/architecture/` or the project's equivalent), when a fix or finding
+   changes documented pipeline behaviour, configuration, events, errors or data structures; flag stale
+   sections. No architecture document: note the gap in the report.
+5. **Memory:** at most 5 lines of new patterns, de-duplicated by `[module]:` prefix; skip past 180 lines.
+6. **Commit** the plan file, status file, registry and architecture document (not memory). CLAUDE.md is
+   never edited here.
 
-2. **Update Status File** (if exists): Upsert module row with verification status
-   - Add/update `Stubs` column: `{N} actionable, {M} blocked, {K} MVP` (show `0` if all zero, omit zero categories)
-   - Add/update `Stub Gate` column: `PASSED` / `FAILED` / `PENDING` / `UNKNOWN`
-   - Example: `| M6 Intent Engine | ✅ COMPLETE | 94% | 0 actionable, 1 MVP | PASSED | feat/m6 | ... |`
-
-3. **Update Blueprint Registry** (if `BLUEPRINT_MODE=true`) — update `context/blueprints/blprnt-registry.md`:
-   - **YAML frontmatter**: Update `modules_complete` count, `last_updated`, `status` (if all modules done → `complete`), `current_phase`
-   - **Module Status Table**: Upsert row — Status (`COMPLETE`/`IN_PROGRESS`), Gate (from gate check results), Tests (from test run), Coverage (from coverage report), Impl Files (created/expected), Deviations (count), Last Updated (today)
-   - **Overall Status table**: Update aggregate metrics (Modules Complete X/{modules_total from the registry frontmatter}, Regression Suite test totals)
-   - **Stage Gate Status**: If verification passed all checks for a gate, update gate section checks to PASS with command and date
-   - **Implementation Progress**: Update Created vs Expected file counts for this module
-   - **Contract Compliance Matrix**: Mark contracts produced by this module as Impl Status=`COMPLETE`, Integration Verified=`Yes`
-   - **Regression History**: Add row — Run #, date, trigger description, modules tested, result (PASS/FAIL with test count), failure count
-   - **Stub/Placeholder Tracking**: Create/update per-module stub summary table:
-     ```
-     | M-ID | Module | Total Stubs | Actionable | Blocked | MVP/Intentional | Gate Status | Last Scanned |
-     ```
-   - **Blocked Stub Dependencies**: Create/update sub-table for stubs awaiting upstream modules:
-     ```
-     | STUB ID | Module | Blocked By | Description | Auto-Resolve When |
-     | STUB-DEP-002 | M4 types.ts | M8 | scoring typed as unknown | M8 marked COMPLETE |
-     ```
-   - When a blocked stub is resolved (upstream now COMPLETE), remove it from the blocked table
-
-4. **Update Architecture Document** (MANDATORY if pipeline-affecting changes were made or verified):
-   - Check if any gaps found/fixed affect documented pipeline behavior, config parameters, event types, error codes, or data structures
-   - Update the architecture document (`docs/architecture/` or project-equivalent) with verified changes
-   - Flag stale sections where implementation diverges from documentation
-   - If no architecture doc exists for the project, note it as a gap in the final report
-
-5. **Update MEMORY.md** (if new patterns): Max 5 lines, dedup by `[module]:` prefix, skip if >180 lines
-
-6. **Include in Commit**: Stage plan file + status file + registry + architecture doc (not MEMORY.md)
+**Non-batch workflows:** blocked stubs accumulate without a complete-implementation gate. Run
+`/verify-implementation --stubs --all --force` once every module is implemented, to catch stubs that are
+now actionable.
 
 ---
 
-## Usage Examples
+## Usage
 
 ```bash
-/verify-implementation                                    # Current/active module
-/verify-implementation context/blueprints/blprnt-M2.md   # Blueprint mode - specific module
-/verify-implementation --stubs --all                      # Stub scan across all implemented modules
-/verify-implementation --force                            # Force re-verify even if marked complete
-/verify-implementation --status M2                        # Query stub gate status without running
-/verify-implementation --deep                             # 7 specialist agents for a final audit
-/verify-implementation --status                            # Show stub gate status for all modules
-/verify-implementation --status M3                         # Show stub gate status for M3 only
-/verify-implementation --status ALL                        # Explicit all-modules status query
+/verify-implementation                                    # current module
+/verify-implementation context/blueprints/blprnt-M2.md   # a module blueprint
+/verify-implementation --force                            # even if marked complete
+/verify-implementation --stubs --all                      # stub and contract scan, every module
+/verify-implementation --deep                             # 7 specialist agents, for a final audit
+/verify-implementation --status                           # stub gate status, every module (no agents)
+/verify-implementation --status M3                        # one module
 ```
-
-## Integration
-
-After running:
-- CRITICAL, HIGH and normal-use findings fixed automatically, within 2 sweeps; MEDIUM and LOW logged with reasons
-- Stub gaps detected, fixed where possible, blocked stubs tracked with dependency notes
-- STUB-MVP (INFO) gaps tracked but never remediated (intentional post-MVP stubs)
-- Tests/types/build validated
-- Fixes committed locally (not pushed)
-- Unfixable gaps documented
-- Plan file + status file updated (includes Stubs column)
-- Blueprint mode: contracts verified, registry updated, stub tracking section maintained
-- **Default**: Verifies current session's module (detected from TodoWrite/recent commands, then status file; warns if falling back to file modification time)
-- **`--all` mode**: Sequentially verifies all implemented modules from status file
-- **`--force` mode**: Ignores completion markers — useful for regression testing, post-refactor validation, or auditing "complete" modules
-- **`--stubs` mode**: Quick stub-only scan (Agent 6 only) — useful for fast stub audits without full verification overhead
-- **`--status` mode**: Query-only — displays stub gate status per module from status files without running any agents
-- **`--skip-stub-gate`**: Consumed by implement-plan/implement-batch — stub gate results are advisory only (do not block completion)
-- **Non-batch workflows**: For individual `/implement-plan` calls, blocked stubs accumulate without an automated complete-implementation gate. Users should run `/verify-implementation --stubs --all --force` after all modules are implemented to catch previously-blocked stubs that are now actionable.
-
-## Context Sync Notes
-
-- **Plan file**: Source of truth — verification results written back
-- **context/implementation-status.md**: Cross-session tracker — one row per module
-- **MEMORY.md**: Receives reusable patterns only (max 3 lines, deduped)
-- **CLAUDE.md**: NEVER auto-edited — use /optimize-context for manual sync
