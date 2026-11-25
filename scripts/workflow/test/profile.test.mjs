@@ -205,3 +205,43 @@ test('profile-check rejects a placeholder inside quotes', () => {
   assert.ok(errs.some((e) => /commands\.test_task: placeholder \{files\} is inside quotes/.test(e)), errs.join('\n'));
   assert.ok(errs.some((e) => /test_db\.bootstrap: placeholder \{url\} is inside quotes/.test(e)), errs.join('\n'));
 });
+
+test('profile-check --smoke --install-first runs install, then build, before the gates; a failed install skips the rest', (t) => {
+  const d = tmp(t);
+  const prof = (install) => ({
+    version: 1,
+    project: 'my-app',
+    updated: '2026-11-25',
+    commands: { install: install, build: 'test -f installed && touch built', typecheck: 'test -f built' },
+    gates: { needs: { cmd: 'test -f built', kind: 'check', smoke: true } },
+  });
+  const f = write(join(d, '.claude', 'workflow-profile.json'), prof('touch installed'));
+  const before = run('profile-check.mjs', ['--profile', f, '--smoke', '--only', 'gates.needs', '--json']);
+  assert.equal(before.code, 1, 'without --install-first the gate runs on an unbuilt tree');
+  const r = run('profile-check.mjs', ['--profile', f, '--smoke', '--install-first', '--only', 'gates.needs', '--only', 'commands.typecheck', '--json']);
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(r.out).smoke.map((x) => `${x.id}:${x.status}`), ['commands.install:pass', 'commands.build:pass', 'gates.needs:pass', 'commands.typecheck:pass']);
+  write(f, prof('exit 5'));
+  const bad = run('profile-check.mjs', ['--profile', f, '--smoke', '--install-first', '--json']);
+  assert.equal(bad.code, 1);
+  const s = Object.fromEntries(JSON.parse(bad.out).smoke.map((x) => [x.id, x]));
+  assert.equal(s['commands.install'].status, 'fail');
+  assert.equal(s['gates.needs'].status, 'skipped');
+  assert.match(s['gates.needs'].reason, /commands\.install failed/);
+});
+
+test('profile: test_db.url renders {url} with credentials; it must name {host} and {name}', async () => {
+  const { dbUrl } = await import('../lib/profile.mjs');
+  assert.equal(dbUrl({ host: 'localhost', port: 6543, url: 'postgresql://u:p@{host}:{port}/{name}' }, 'x_test'), 'postgresql://u:p@localhost:6543/x_test');
+  assert.equal(dbUrl({}, 'x_test'), 'postgresql://127.0.0.1:5432/x_test', 'the default template');
+  const p = example();
+  p.test_db.url = 'postgresql://u:p@db.elsewhere:5432/{name}';
+  assert.match(checkProfile(p, schema()).join('\n'), /test_db\.url: needs \{host\}/);
+  p.test_db.url = 'postgresql://{host}:{port}/{name}?x={lane}';
+  assert.match(checkProfile(p, schema()).join('\n'), /test_db\.url: unknown placeholder \{lane\}/);
+  p.test_db.url = 'postgresql://u:p@{host}:{port}/{name}';
+  p.ports.offsets = { web: 2000, site: 2000 };
+  assert.match(checkProfile(p, schema()).join('\n'), /ports\.offsets\.site: offset 2000 is also web's/);
+  p.ports.offsets = { web: 2000 };
+  assert.deepEqual(checkProfile(p, schema()), []);
+});

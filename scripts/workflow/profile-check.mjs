@@ -10,7 +10,8 @@ const USAGE = `profile-check.mjs — validate <project>/.claude/workflow-profile
 
 Usage:
   node profile-check.mjs [--profile <path>] [--schema <path>] [--json]
-  node profile-check.mjs --smoke [placeholder flags] [--only <id>]… [--print] [--timeout <s>]
+  node profile-check.mjs --smoke [--install-first] [placeholder flags] [--only <id>]… [--print]
+                         [--timeout <s>]
 
 Checks the profile against the schema (--schema, else .claude/templates/
 workflow-profile.schema.json in this checkout, else in $WORKFLOW_HOME), then cross-field rules: every tier names a known gate, every "heavy" names a heavy_jobs slot,
@@ -22,9 +23,17 @@ come from flags and are shell-quoted, so a value cannot inject shell: --files is
 whitespace (or repeated) and each path becomes one quoted word. An entry whose placeholders are
 not all given is reported as skipped.
 
+Precondition: --smoke runs in a checkout whose dependencies are installed and built, as the gates
+expect; it runs the gates first, then commands.*. In a fresh checkout or worktree pass
+--install-first: commands.install, then commands.build (each when defined), run before everything
+else (even when --only leaves them out), and if either fails the rest are skipped, not run red.
+A staged-file gate (lint-staged, a pre-commit hook) passes vacuously on an empty index: it proves
+the hook runs, not that its tools work.
+
 Placeholder flags: --files --base --name --url --port --lane --set
 Options:
   --profile <path>  default: .claude/workflow-profile.json in the nearest project root
+  --install-first   run commands.install, then commands.build, before the other entries
   --only <id>       smoke only this entry (e.g. gates.lint-staged, commands.build); repeatable
   --print           list what --smoke would run, run nothing
   --timeout <s>     per command, default 600
@@ -40,6 +49,7 @@ export function main(argv) {
       profile: { type: 'string' },
       schema: { type: 'string' },
       smoke: { type: 'boolean' },
+      'install-first': { type: 'boolean' },
       print: { type: 'boolean' },
       json: { type: 'boolean' },
       only: { type: 'string', multiple: true },
@@ -67,7 +77,18 @@ export function main(argv) {
     if (values.files) values.files = values.files.flatMap((f) => f.split(/\s+/)).filter(Boolean);
     let entries = smokeEntries(profile);
     if (flags.only?.length) entries = entries.filter((e) => flags.only.includes(e.id));
+    const PREP = ['commands.install', 'commands.build'];
+    let prep = [];
+    if (flags['install-first']) {
+      prep = PREP.filter((id) => typeof profile.commands?.[id.slice(9)] === 'string').map((id) => ({ id, cmd: profile.commands[id.slice(9)], prep: true }));
+      entries = [...prep, ...entries.filter((e) => !PREP.includes(e.id))];
+    }
+    let prepFailed = '';
     for (const e of entries) {
+      if (prepFailed) {
+        result.smoke.push({ id: e.id, cmd: e.cmd, status: 'skipped', reason: `${prepFailed} failed` });
+        continue;
+      }
       const { cmd, missing } = fill(e.cmd, values);
       if (missing.length) {
         result.smoke.push({ id: e.id, cmd, status: 'skipped', reason: `needs ${missing.map((m) => `--${m}`).join(' ')}` });
@@ -85,6 +106,7 @@ export function main(argv) {
         exit: r.code,
         ...(r.code === 0 ? {} : { tail: (r.stderr || r.stdout).trim().split('\n').slice(-5).join('\n') }),
       });
+      if (e.prep && r.code !== 0) prepFailed = e.id;
     }
   }
   const failed = !result.valid || result.smoke.some((s) => s.status === 'fail');

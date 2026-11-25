@@ -103,3 +103,86 @@ test('scaffold refuses a test DB host outside allow_hosts and an unknown base', 
   assert.equal(r2.code, 1);
   assert.match(r2.out, /\[fail\] worktree A: base no-such-ref is not a commit/);
 });
+
+const editProfile = (repo, fn) => {
+  const pf = join(repo, '.claude', 'workflow-profile.json');
+  const p = JSON.parse(readFileSync(pf, 'utf8'));
+  fn(p);
+  write(pf, p);
+};
+
+test('scaffold smoke: in a fresh worktree install, then build, then the gates, then the named commands', (t) => {
+  const { d, repo, map } = fixture(t);
+  editProfile(repo, (p) => {
+    p.commands.install = 'echo installed > .lane/installed';
+    p.commands.build = 'test -f .lane/installed && echo built > .lane/built';
+    p.commands.typecheck = 'test -f .lane/built && echo typed > .lane/typed';
+    p.gates.quick.cmd = 'test -f .lane/built && echo lane={lane} port={port} > .lane/smoke.txt';
+  });
+  sh(repo, 'git commit -qam install', d);
+  const dry = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--smoke-commands', 'typecheck'], { home: d });
+  assert.equal(dry.code, 0, dry.out + dry.err);
+  const order = ['commands.install', 'commands.build', 'gates.quick', 'commands.typecheck'].map((k) => dry.out.indexOf(`[would] smoke: ${k}:`));
+  assert.ok(order.every((i) => i >= 0), dry.out);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `smoke order: ${order}`);
+
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--apply', '--smoke-commands', 'typecheck'], { home: d });
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.equal(readFileSync(join(d, 'wt', 'demo-a', '.lane', 'smoke.txt'), 'utf8'), 'lane=a port=4400\n');
+  assert.ok(existsSync(join(d, 'wt', 'demo-a', '.lane', 'typed')));
+
+  // a kept worktree runs install and build only when named
+  const again = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--skip-db'], { home: d });
+  assert.match(again.out, /\[skip\] smoke: commands\.install: renders/);
+});
+
+test('scaffold smoke: a failed install skips the gates instead of reporting them red', (t) => {
+  const { d, repo, map } = fixture(t);
+  editProfile(repo, (p) => (p.commands.install = 'echo no network >&2; exit 7'));
+  sh(repo, 'git commit -qam install', d);
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--apply', '--skip-db'], { home: d });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /\[fail\] smoke: commands\.install: .*no network/);
+  assert.match(r.out, /\[skip\] smoke: gates\.quick: .*not run: commands\.install failed/);
+});
+
+test('scaffold ports: registry "taken" and "fixed" are never handed out', (t) => {
+  const { d, repo, map } = fixture(t);
+  write(join(repo, '.claude', 'ports.json'), {
+    version: 1,
+    allocations: {},
+    taken: [4400, { set: 'old', lane: 'x', api: 4401, web: [4402] }],
+    fixed: { 'shared-db': 4403, cache: '4405' },
+  });
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--json'], { home: d });
+  assert.equal(r.code, 0, r.out + r.err);
+  const lanes = Object.fromEntries(JSON.parse(r.out).lanes.map((l) => [l.lane, l.portMap]));
+  assert.deepEqual(lanes, { A: { api: 4404, web: 4406 }, B: { api: 4407 } });
+});
+
+test('scaffold ports: step and offsets give each lane a base port plus named offsets; names default to ports.names', (t) => {
+  const { d, repo, map } = fixture(t);
+  editProfile(repo, (p) => (p.ports = { range: [4400, 4499], registry: '.claude/ports.json', step: 10, offsets: { web: 2000, site: 2002 }, names: ['api', 'web'] }));
+  write(join(repo, '.claude', 'ports.json'), { version: 1, allocations: {}, taken: [4410, 6420] });
+  const m = JSON.parse(readFileSync(map, 'utf8'));
+  m.lanes = [{ lane: 'A', ports: ['api', 'web', 'site', 'admin'] }, { lane: 'B' }, { lane: 'C', ports: [] }];
+  write(map, m);
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--json', '--apply', '--skip-db', '--skip-smoke'], { home: d });
+  assert.equal(r.code, 0, r.out + r.err);
+  const lanes = Object.fromEntries(JSON.parse(r.out).lanes.map((l) => [l.lane, l.portMap]));
+  // A at base 4400; B cannot take 4410 (taken) nor 4420 (its web 6420 is taken), so 4430
+  assert.deepEqual(lanes, { A: { api: 4400, web: 6400, site: 6402, admin: 4401 }, B: { api: 4430, web: 6430 }, C: {} });
+  // a re-run reuses them
+  const again = run('scaffold.mjs', ['--lane-map', map, '--repo', repo, '--json', '--skip-db', '--skip-smoke'], { home: d });
+  assert.deepEqual(Object.fromEntries(JSON.parse(again.out).lanes.map((l) => [l.lane, l.portMap])), lanes);
+  const reg = JSON.parse(readFileSync(join(repo, '.claude', 'ports.json'), 'utf8'));
+  assert.deepEqual(reg.taken, [4410, 6420], 'taken is kept on write');
+});
+
+test('scaffold test DB: {url} renders from test_db.url, credentials included', (t) => {
+  const { d, repo, map } = fixture(t);
+  editProfile(repo, (p) => (p.test_db.url = 'postgresql://app:secret@{host}:{port}/{name}?sslmode=disable'));
+  const r = run('scaffold.mjs', ['--lane-map', map, '--repo', repo], { home: d });
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.match(r.out, /\[would\] test-db A: echo boot 'postgresql:\/\/app:secret@127\.0\.0\.1:5432\/app_demo_a_test\?sslmode=disable'/);
+});

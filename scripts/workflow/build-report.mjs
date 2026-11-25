@@ -5,12 +5,12 @@ import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, writeFileSy
 import { join, basename, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { args, die, abs, readJson, nowStamp, projectRoot } from './lib/common.mjs';
+import { args, die, abs, readJson, nowStamp, projectRoot, git } from './lib/common.mjs';
 
 const USAGE = `build-report.mjs — tokens, cost and time per agent of a build, from the transcripts
 
 Usage:
-  node build-report.mjs (--session <id>… | --all [--since YYYY-MM-DD])
+  node build-report.mjs (--session <id>… | --all) [--since <time>] [--until <time>]
                         [--project <dir> | --slug <slug>] [--projects-root <dir>]
                         [--prices <file>] [--roles <file>]
                         [--out <file> | --set <set> [--profile <path>]] [--json <file>]
@@ -19,11 +19,17 @@ Reads ~/.claude/projects/<slug>/<session>.jsonl (the orchestrator) and
 <session>/subagents/*.jsonl with their .meta.json (every agent it launched).
 
   --session <id>       a session id; repeatable, or comma-separated
-  --all                every session in the project dir; --since keeps those modified on or after
+  --all                every session in the project dir (with --since: those modified on or after it)
+  --since <time>       ISO time (2026-11-25T09:30, or a date: local midnight); with --until, the
+  --until <time>       window: only transcript lines timestamped inside it count, so an agent with
+                       no line in it drops out and one running across an edge counts its part
+                       inside (use the task list's started time and its last checkpoint)
   --project <dir>      project root whose slug to read (default: the nearest project root of the
-                       current directory); the slug is the absolute path with every
-                       non-alphanumeric character replaced by "-"
-  --slug <slug>        the slug itself
+                       current directory; inside a git worktree, the main checkout, found with
+                       git rev-parse --git-common-dir, since the orchestrator runs there; the
+                       worktree's own slug is the fallback); the slug is the absolute path with
+                       every non-alphanumeric character replaced by "-"
+  --slug <slug>        the slug itself; a value starting with "-" is fine (--slug -Users-me-my-app)
   --projects-root <d>  default ~/.claude/projects
   --prices <file>      JSON price table, USD per "per" tokens (default 1,000,000):
                          { "per": 1000000, "default": "<key>",
@@ -92,7 +98,17 @@ export function messageCost(prices, model, u) {
   );
 }
 
-export function analyzeTranscript(path, prices) {
+/** Parse --since/--until: an ISO time, or a bare date as local midnight. NaN when unparseable. */
+export function parseTime(s) {
+  if (!s) return null;
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00` : s;
+  return Date.parse(t);
+}
+
+export function analyzeTranscript(path, prices, { since = null, until = null } = {}) {
+  const windowed = since !== null || until !== null;
+  const inside = (t) => (since === null || t >= since) && (until === null || t <= until);
+  let inWin = since === null;
   const seenMsg = new Set();
   const seenTool = new Set();
   const usage = Object.fromEntries(TOKEN_KEYS.map((k) => [k, 0]));
@@ -116,8 +132,13 @@ export function analyzeTranscript(path, prices) {
     }
     if (d.timestamp) {
       const t = Date.parse(d.timestamp);
-      if (Number.isFinite(t)) times.push(t);
+      if (Number.isFinite(t)) {
+        // A line without a timestamp belongs to the window of the last one that had one.
+        inWin = !windowed || inside(t);
+        if (inWin) times.push(t);
+      }
     }
+    if (!inWin) continue;
     const m = d.message;
     if (d.type === 'user' && Array.isArray(m?.content))
       for (const x of m.content) if (x?.type === 'tool_result' && x.is_error) toolErrors++;
@@ -187,11 +208,24 @@ export function roleOf(rolesCfg, agent) {
 
 export const slugOf = (dir) => resolve(dir).replace(/[^A-Za-z0-9]/g, '-');
 
-export function collect({ projectDir, sessions, prices, roles }) {
+/** The project root whose transcripts to read: inside a linked worktree, the main checkout. */
+export function mainCheckout(dir) {
+  const r = git(dir, 'rev-parse', '--git-common-dir');
+  const g = git(dir, 'rev-parse', '--git-dir');
+  if (r.code !== 0 || g.code !== 0) return null;
+  const common = resolve(dir, r.out);
+  if (common === resolve(dir, g.out) || basename(common) !== '.git') return null;
+  return dirname(common);
+}
+
+const hasActivity = (a) => a.turns > 0 || a.toolCalls > 0;
+
+export function collect({ projectDir, sessions, prices, roles, window = {} }) {
+  const windowed = window.since != null || window.until != null;
   const agents = [];
   for (const s of sessions) {
     const main = join(projectDir, `${s}.jsonl`);
-    if (existsSync(main)) agents.push({ kind: 'main', session: s, description: `main ${s.slice(0, 8)}`, ...analyzeTranscript(main, prices) });
+    if (existsSync(main)) agents.push({ kind: 'main', session: s, description: `main ${s.slice(0, 8)}`, ...analyzeTranscript(main, prices, window) });
     const subDir = join(projectDir, s, 'subagents');
     let files = [];
     try {
@@ -210,12 +244,13 @@ export function collect({ projectDir, sessions, prices, roles }) {
         session: s,
         description: meta.description || basename(f, '.jsonl'),
         agentType: meta.agentType || '',
-        ...analyzeTranscript(p, prices),
+        ...analyzeTranscript(p, prices, window),
       });
     }
   }
-  for (const a of agents) a.role = roleOf(roles, a);
-  return agents;
+  const kept = windowed ? agents.filter(hasActivity) : agents;
+  for (const a of kept) a.role = roleOf(roles, a);
+  return kept;
 }
 
 const n = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(x));
@@ -228,11 +263,12 @@ const top = (o, k = 3) =>
     .map(([c, v]) => `${c} ${v}`)
     .join(', ') || '—';
 
-export function renderMarkdown(agents, { slug, sessions, pricesPath, rolesPath }) {
+export function renderMarkdown(agents, { slug, sessions, pricesPath, rolesPath, sinceRaw, untilRaw }) {
   const priced = agents.some((a) => a.cost !== null);
   const L = [];
   L.push(`# Build report — ${sessions.length} session(s)`, '');
   L.push(`Generated ${nowStamp()} from \`${slug}\`. Prices: ${pricesPath || 'none'}. Roles: ${rolesPath || 'agent type'}.`);
+  if (sinceRaw || untilRaw) L.push(`Window: ${sinceRaw || 'start'} to ${untilRaw || 'end'}; only transcript lines inside it count.`);
   L.push('Active minutes count gaps of at most 10 minutes. Turns are API responses, deduplicated.', '');
 
   const byRole = new Map();
@@ -272,12 +308,25 @@ export function renderMarkdown(agents, { slug, sessions, pricesPath, rolesPath }
   return L.join('\n');
 }
 
+/** parseArgs refuses "--slug -x"; a slug always starts with "-", so join it as "--slug=-x". */
+export function joinDashValues(argv, names = ['slug']) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (names.some((n) => a === `--${n}`) && i + 1 < argv.length && argv[i + 1].startsWith('-') && argv[i + 1] !== '--') out.push(`${a}=${argv[++i]}`);
+    else out.push(a);
+  }
+  return out;
+}
+
 export function main(argv) {
+  argv = joinDashValues(argv);
   const { flags } = args(
     {
       session: { type: 'string', multiple: true },
       all: { type: 'boolean' },
       since: { type: 'string' },
+      until: { type: 'string' },
       project: { type: 'string' },
       slug: { type: 'string' },
       'projects-root': { type: 'string' },
@@ -292,17 +341,25 @@ export function main(argv) {
     argv,
   );
   const projectDirRoot = flags.project ? abs(flags.project) : projectRoot();
-  const slug = flags.slug || slugOf(projectDirRoot);
   const projectsRoot = abs(flags['projects-root'] || join(homedir(), '.claude', 'projects'));
+  let slug = flags.slug;
+  if (!slug) {
+    const own = slugOf(projectDirRoot);
+    const main = flags.project ? null : mainCheckout(projectDirRoot);
+    slug = main && existsSync(join(projectsRoot, slugOf(main))) ? slugOf(main) : own;
+  }
   const projectDir = join(projectsRoot, slug);
   if (!existsSync(projectDir)) die(`no transcripts at ${projectDir}`, 1);
+  const since = parseTime(flags.since);
+  const until = parseTime(flags.until);
+  if (Number.isNaN(since)) die(`--since: not a time: ${flags.since}`);
+  if (Number.isNaN(until)) die(`--until: not a time: ${flags.until}`);
+  if (since !== null && until !== null && since > until) die('--since is after --until');
   let sessions = (flags.session || []).flatMap((s) => s.split(',')).map((s) => s.trim()).filter(Boolean);
-  if (flags.all) {
-    const since = flags.since ? Date.parse(`${flags.since}T00:00:00`) : 0;
+  if (flags.all)
     sessions = readdirSync(projectDir)
-      .filter((f) => f.endsWith('.jsonl') && statSync(join(projectDir, f)).mtimeMs >= since)
+      .filter((f) => f.endsWith('.jsonl') && statSync(join(projectDir, f)).mtimeMs >= (since ?? 0))
       .map((f) => basename(f, '.jsonl'));
-  }
   if (!sessions.length) die(`give --session <id> or --all\n\n${USAGE}`);
   let prices = null;
   let roles = null;
@@ -313,9 +370,10 @@ export function main(argv) {
   } catch (e) {
     die(e.message);
   }
-  const agents = collect({ projectDir, sessions, prices, roles });
-  if (!agents.length) die(`no transcripts for ${sessions.join(', ')} in ${projectDir}`, 1);
-  const md = renderMarkdown(agents, { slug, sessions, pricesPath: flags.prices, rolesPath: flags.roles });
+  const agents = collect({ projectDir, sessions, prices, roles, window: { since, until } });
+  if (!agents.length)
+    die(`no transcripts for ${sessions.join(', ')} in ${projectDir}${since !== null || until !== null ? ' inside the window' : ''}`, 1);
+  const md = renderMarkdown(agents, { slug, sessions, pricesPath: flags.prices, rolesPath: flags.roles, sinceRaw: flags.since, untilRaw: flags.until });
 
   let out = flags.out && abs(flags.out);
   if (!out && flags.set) {

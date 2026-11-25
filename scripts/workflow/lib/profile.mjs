@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { readJson, placeholdersIn, quotedPlaceholders, PLACEHOLDERS } from './common.mjs';
+import { readJson, placeholdersIn, quotedPlaceholders, PLACEHOLDERS, fill } from './common.mjs';
 import { validate } from './schema.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +50,21 @@ export function semanticErrors(p) {
     for (const ph of quotedPlaceholders(c))
       errs.push(`${path}: placeholder {${ph}} is inside quotes; leave it bare, the scripts shell-quote every value`);
   }
+  const url = p.test_db?.url;
+  if (typeof url === 'string') {
+    const phs = placeholdersIn(url);
+    for (const ph of phs)
+      if (!URL_PLACEHOLDERS.includes(ph)) errs.push(`$.test_db.url: unknown placeholder {${ph}} (known: ${URL_PLACEHOLDERS.join(', ')})`);
+    // The host must come from test_db.host, so allow_hosts still guards it.
+    for (const need of ['host', 'name'])
+      if (!phs.includes(need)) errs.push(`$.test_db.url: needs {${need}}, so the URL follows test_db.host and the lane's DB name`);
+  }
+  const offs = Object.entries(p.ports?.offsets || {}).filter(([k]) => k !== 'notes');
+  const seen = new Map();
+  for (const [k, v] of offs) {
+    if (seen.has(v)) errs.push(`$.ports.offsets.${k}: offset ${v} is also ${seen.get(v)}'s`);
+    seen.set(v, k);
+  }
   const r = p.ports?.range;
   if (Array.isArray(r) && r.length === 2 && r[0] > r[1]) errs.push('$.ports.range: start is above end');
   const db = p.test_db;
@@ -80,5 +95,14 @@ export function smokeEntries(p, { includeCommands = true } = {}) {
   return out;
 }
 
-/** The {url} placeholder for a lane's test DB. */
-export const dbUrl = (db, name) => `postgresql://${db.host || '127.0.0.1'}:${db.port || 5432}/${name}`;
+/** Placeholders a test_db.url template may use. */
+export const URL_PLACEHOLDERS = ['host', 'port', 'name'];
+export const DEFAULT_DB_URL = 'postgresql://{host}:{port}/{name}';
+
+/**
+ * The {url} placeholder for a lane's test DB: test_db.url (default postgresql://{host}:{port}/{name})
+ * with {host} (default 127.0.0.1), {port} (default 5432) and {name} filled verbatim. The result is
+ * shell-quoted when it is put into a command, like every other value.
+ */
+export const dbUrl = (db, name) =>
+  fill(db?.url || DEFAULT_DB_URL, { host: db?.host || '127.0.0.1', port: db?.port || 5432, name }, { quote: false }).cmd;

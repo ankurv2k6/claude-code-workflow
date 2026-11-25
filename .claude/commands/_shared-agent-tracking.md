@@ -25,7 +25,8 @@ any moment: context exhaustion, a login change, a crash, a closed laptop.
 | Task progress | commit subjects carrying the task id: `feat(m81): T6 events import screen` | the agent | one commit per task |
 | Progress note | `.lane/progress.md` in the worktree, listed in `.git/info/exclude` | the agent | after each task, and before a session split |
 
-Templates: `~/.claude/templates/batch-progress.md` and `~/.claude/templates/batch-briefs/`.
+Templates: `$WH/.claude/templates/batch-progress.md` and `$WH/.claude/templates/batch-briefs/`, with `WH` as
+`_shared-project-profile.md` defines it, so the templates and the skills come from the same version.
 
 **Task-list events** (Agents rows, module status, decisions, owner corrections) go through
 `"${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/scripts/workflow/orch-event.mjs"`, which takes times

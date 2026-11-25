@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmp, run, write } from './helpers.mjs';
+import { tmp, run, write, gitRepo, sh } from './helpers.mjs';
 import { bashCategory, slugOf } from '../build-report.mjs';
 
 const T0 = Date.parse('2026-01-01T10:00:00Z');
@@ -119,4 +119,42 @@ test('bash categories', () => {
   assert.equal(bashCategory('sleep 5'), 'wait');
   assert.equal(bashCategory('sed -n 1,5p f'), 'read/search');
   assert.equal(bashCategory('node scripts/x.mjs'), 'other');
+});
+
+test('build-report: --slug takes a value that starts with "-"', (t) => {
+  const f = fixture(t);
+  const slug = slugOf(f.project);
+  assert.ok(slug.startsWith('-'));
+  const r = run('build-report.mjs', ['--session', f.S, '--slug', slug, '--projects-root', f.root]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, new RegExp(`from \`${slug}\``));
+});
+
+test('build-report: inside a worktree the default slug is the main checkout\'s', (t) => {
+  const f = fixture(t);
+  const main = realpathSync(gitRepo(join(f.d, 'main-app'), { home: f.d }));
+  const wt = join(realpathSync(f.d), 'main-app-wt');
+  sh(main, `git worktree add -q -b lane/x ${wt}`, f.d);
+  // the transcripts were written under the main checkout's slug
+  cpSync(join(f.root, slugOf(f.project)), join(f.root, slugOf(main)), { recursive: true });
+  const r = run('build-report.mjs', ['--session', f.S, '--projects-root', f.root], { cwd: wt, home: f.d });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, new RegExp(`from \`${slugOf(main)}\``));
+});
+
+test('build-report: --since/--until window the lines, so agents outside drop out and edges count in part', (t) => {
+  const f = fixture(t);
+  const js = join(f.d, 'w.json');
+  const r = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', at(4), '--until', at(8), '--json', js]);
+  assert.equal(r.code, 0, r.err);
+  const agents = JSON.parse(readFileSync(js, 'utf8'));
+  assert.deepEqual(agents.map((a) => a.kind), ['sub'], 'the orchestrator has no line inside the window');
+  assert.match(r.out, /Window: .* to .*; only transcript lines inside it count/);
+  const edge = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', at(2), '--json', js]);
+  assert.equal(edge.code, 0, edge.err);
+  const main = JSON.parse(readFileSync(js, 'utf8')).find((a) => a.kind === 'main');
+  assert.equal(main.turns, 2, 'm1 falls before the window');
+  assert.equal(main.toolErrors, 1);
+  assert.equal(run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', at(40)]).code, 1);
+  assert.equal(run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', 'soon']).code, 2);
 });

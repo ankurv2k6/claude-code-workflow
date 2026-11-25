@@ -40,8 +40,8 @@ Any object may carry a `"notes"` string. Only `version`, `project` and `updated`
 | `invariant_suites` | test paths never quarantined, run first at cut end | none named |
 | `risk_routing` | `paths` globs → `verifier` agent, with a `reason` | the verifier's own judgement |
 | `heavy_jobs` | slot name → `slots`, `lock_dir` | heavy runs one at a time, by the orchestrator |
-| `test_db.*` | `host`, `port`, `container`, `name_pattern`, `create`, `bootstrap`, `allow_hosts` | CLAUDE.md and the briefs, as in v1 |
-| `ports.*` | `range` [low, high] and the `registry` file | ports from the briefs, as in v1 |
+| `test_db.*` | `host`, `port`, `container`, `name_pattern`, `create`, `bootstrap`, `url`, `allow_hosts` | CLAUDE.md and the briefs, as in v1; `url`: `postgresql://{host}:{port}/{name}` |
+| `ports.*` | `range` [low, high], the `registry` file, `names` (a lane's port names), `step`, `offsets` (name → offset) | ports from the briefs, as in v1; `names` `["api"]`, `step` 1, no offsets |
 | `known_reds` | file of reds that predate the cut | none: every red is new |
 | `logs_dir` | where long commands write their output | `logs` |
 | `agents.*` | `max_concurrent`, `verifier_model`, `overrides` (role → model) | 5 · `opus` · none |
@@ -78,12 +78,34 @@ stage, the 30-line hand-back, the context budget, the watchdog) apply with or wi
 | `{files}` | the task's changed paths, space-separated, each shell-quoted |
 | `{base}` | the lane's base sha |
 | `{name}` | the test DB name, from `test_db.name_pattern` |
-| `{url}` | the test DB URL built from `test_db.host`, `port` and `{name}` |
-| `{port}` | a port allocated from `ports.range` and recorded in `ports.registry` |
+| `{url}` | the test DB URL: the `test_db.url` template with `{host}`, `{port}` and `{name}` filled |
+| `{port}` | the lane's first named port, allocated from `ports.range` and recorded in `ports.registry` |
 | `{lane}` · `{set}` | the lane id and the set name, lower case |
 
 A command with an unfilled placeholder is not run. A test DB host outside `test_db.allow_hosts` is
 refused.
+
+**The test DB URL.** `test_db.url` is a template with `{host}`, `{port}` and `{name}` (default
+`postgresql://{host}:{port}/{name}`); it must name `{host}` and `{name}`, so the host is always
+`test_db.host` and `allow_hosts` still guards it. Use it when the test server needs a named user:
+`postgresql://app:app@{host}:{port}/{name}`. **Credentials may be written in it only for a local test
+database** (a throwaway container or a dedicated test host), never for a shared, staging or production one,
+because the profile is committed. The rendered URL is shell-quoted as one word, so a `$VAR` in it is not
+expanded.
+
+**Ports.** The registry (`ports.registry`) holds `allocations` (port → set, lane, name), which the scaffold
+appends to, plus two lists it only reads: `taken` (port numbers, or records holding them, for ports another
+batch or tool uses) and `fixed` (name → port, for services that never move). None of them is handed out.
+Without `step` or `offsets`, each of a lane's port names takes the next free port of the range. With either, a
+lane takes a free base port (range start + k × `step`) and each name sits at base + `offsets.<name>`; a name
+without an offset takes the next free offset of 0, 1, 2…. A lane-map entry's `ports` lists its names;
+absent, `ports.names`; `[]`, none.
+
+**Smoke runs.** A smoke run assumes an installed, built tree: the scaffold runs `commands.install`, then
+`commands.build`, before the gates in a worktree it creates, and `profile-check.mjs --smoke` does the same with
+`--install-first`. A staged-file gate (lint-staged, a pre-commit hook over the index) passes vacuously on an
+empty index: a green smoke proves the hook runs, not that its tools work. The first real commit of a lane is
+the check that they do.
 
 ## Gates and tiers
 

@@ -5,7 +5,7 @@
  *   node scripts/check-skills.mjs
  *
  * Fails (exit 1) when:
- *   - a `_shared-*.md` or `~/.claude/templates/...` reference does not resolve;
+ *   - a `_shared-*.md`, `~/.claude/templates/...` or `$WH/.claude/templates/...` reference does not resolve;
  *   - a retired phrase survives in a command or a Markdown template (rules a revision replaced);
  *   - a file carries a stray tool-call closing tag (`</content>`, `</invoke>`, `</parameter>`);
  *   - a shared protocol lacks frontmatter with a description and `disable-model-invocation: true`;
@@ -107,7 +107,7 @@ for (const file of [...commandFiles, ...templateFiles]) {
   for (const m of text.matchAll(/_shared-[a-z-]+\.md/g)) {
     if (!existsSync(join(COMMANDS, m[0]))) problems.push(`${rel(file)}: reference to missing ${m[0]}`);
   }
-  for (const m of text.matchAll(/~\/\.claude\/templates\/([\w./-]+[\w-])/g)) {
+  for (const m of text.matchAll(/(?:~|\$WH)\/\.claude\/templates\/([\w./-]+[\w-])/g)) {
     if (!existsSync(join(TEMPLATES, m[1]))) problems.push(`${rel(file)}: reference to missing template ${m[1]}`);
   }
 
