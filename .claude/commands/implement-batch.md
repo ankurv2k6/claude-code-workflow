@@ -47,8 +47,9 @@ Execute automatically without permission. Use TodoWrite throughout.
 | `_shared-agent-timeout.md` | completion by notification, the watchdog |
 | `_shared-commit-protocol.md` | commit format, gates, push policy |
 
-**Scripts.** The generic scripts live in `$WORKFLOW_HOME/scripts/workflow/` (`WORKFLOW_HOME` defaults to
-`~/.claude/workflow-release`). Each step that uses one says what to do by hand when it is absent.
+**Scripts.** The generic scripts live in `$WH/scripts/workflow/`, with
+`WH="${WORKFLOW_HOME:-$HOME/.claude/workflow-release}"` (`_shared-project-profile.md`); always expand the
+default. Each step that uses one says what to do by hand when it is absent.
 
 **No profile (v1).** Without `.claude/workflow-profile.json`, the project's mechanics stay as in v1: the
 steps marked "No profile (v1)" below replace the profile steps; every other rule applies as written. A key
@@ -104,15 +105,22 @@ branch first. Worktrees branch from a commit, so uncommitted specs are invisible
 ### 8. Create the living task list
 Copy `~/.claude/templates/batch-progress.md` to `context/batch-progress[-<set>].md` and fill:
 - the header: integration branch, base sha, `max_lanes`, `stall_minutes`, and
-  `workflow_version: <the contents of $WORKFLOW_HOME/VERSION>` (file absent: `1.0.0`);
+  `workflow_version: <the contents of $WH/VERSION>` (file absent: `1.0.0`), the same file the resume
+  procedure compares against;
 - the execution plan (lanes, inputs, merge order) and module status rows;
 - empty Decision and Owner corrections logs.
 
 The orchestrator is its only writer (`orch-event.mjs`, `_shared-agent-tracking.md`).
 
-### 9. Write the briefs
-With the scaffold present, take each lane's worktree, ports and test DB from its dry-run plan (step 10).
-From `~/.claude/templates/batch-briefs/`:
+### 9. Lane map file and scaffold dry run
+Write the lane map as `context/batch-briefs/<set>/lane-map.json` in the format of `scaffold.mjs --help`,
+with every lane's `branch` set to `feat/<set>-<lane>` (the scaffold's own default differs) and `base` the
+integration head. Run `node "$WH/scripts/workflow/scaffold.mjs" --lane-map <file>` (a dry run: it creates
+nothing) and keep its plan: each lane's worktree, ports and test DB. Script absent: worktrees
+`<repo>-wt/<set>-<lane>`, ports and test DBs as the project's briefs and CLAUDE.md give them.
+
+### 10. Write the briefs
+Take each lane's worktree, ports and test DB from step 9. From `~/.claude/templates/batch-briefs/`:
 - **`context/batch-briefs/_common.md`**, the programme rules: create it once, or refresh it. Fill its
   command table from the profile (`shell_prefix`, `commands.*`, `tiers.per_commit`, `tiers.lane_end`,
   `known_reds`, `logs_dir`, `limits.*`) and cite CLAUDE.md by section (`docs.invariants`,
@@ -124,23 +132,31 @@ From `~/.claude/templates/batch-briefs/`:
   ports, logs, scratch directory, effort, the sections to read by anchor, screens and their mockup states,
   and "done".
 
-### 10. Scaffold and known reds
-- **Scaffold:** `node $WORKFLOW_HOME/scripts/workflow/scaffold.mjs` with the lane map. It runs as a dry run
-  by default: read its plan, then run it for real (its `--help` names the flag). It creates the worktrees
-  and branches, allocates ports from the registry, creates the test DBs through `test_db`, runs the
-  `health` gates and smoke-runs every command the briefs name. A command that fails its smoke run is fixed
-  in the profile or the brief before any lane launches.
-  Script absent: create each worktree at launch (Phase 1 step 1), take ports and test DBs as the briefs
-  name them, and run each brief command once yourself on the base head.
-- **Known reds:** run the selection that covers the entries of the `known_reds` file once on the base
-  head. Record which are still red in the task list; briefs point at the file so no agent re-diagnoses them.
-  A red in an `invariant_suites` suite is never a known red: fix it, or stop with an Owner item.
-  No profile (v1): skip; reds that predate the batch are found at the final.
+Commit the task list, the lane map and the briefs together.
 
-Commit the task list and briefs together.
+### 11. Scaffold, smoke run and known reds
+- **Scaffold:** the step 9 command with `--apply` and
+  `--smoke-commands install,build,typecheck,test_lane_end` (those of the four the profile defines). It
+  creates the worktrees and branches, allocates ports from the registry, creates the test DBs through
+  `test_db`, runs the `health` gates, and smoke-runs the `smoke: true` gates plus the named commands in the
+  first lane's worktree. It runs a command only when `--smoke-commands` names it: never name `test_full`
+  (it runs once, at the final) or `test_task` (it needs `{files}`); run `commands.test_task` yourself once
+  in that worktree with one existing test file. A red is fixed in the profile or the brief before any lane
+  launches (BATCH_SMOKE_FAILED).
+- **`--dry-run`:** no scaffold `--apply`. Smoke-run in the current checkout instead, with
+  `node "$WH/scripts/workflow/profile-check.mjs" --profile .claude/workflow-profile.json --smoke --base <sha>
+  --only gates.<name> … --only commands.<key> …`, naming each `smoke: true` gate and the same commands as
+  above. Never run `profile-check --smoke` without `--only`: it would also run `commands.test_full`.
+- **Script absent:** create each worktree at launch (Phase 1 step 1), take ports and test DBs as the briefs
+  name them, and run each brief command (except `test_full`) once yourself on the base head.
+- **Known reds** (not on `--dry-run`): run the selection that covers the entries of the `known_reds` file
+  once on the base head. Record which are still red in the task list; briefs point at the file so no agent
+  re-diagnoses them. A red in an `invariant_suites` suite is never a known red: fix it, or stop with an
+  Owner item. No profile (v1): skip; reds that predate the batch are found at the final.
 
-### 11. `--dry-run` stops here
-Print the lane map, the scaffold's dry-run plan, the smoke-run results and the paths written.
+### 12. `--dry-run` stops here
+Print the lane map, the scaffold's dry-run plan, the smoke-run results and the paths written. A dry run
+creates no worktree, branch or test DB, and launches nothing.
 
 ---
 
@@ -152,7 +168,9 @@ Repeat until every lane is merged, failed or blocked. Never pause between steps.
 Phase 0 lanes (C0, then C0-UI) launch first; no other lane starts until C0 has merged and its verifier has
 signed off. After that, launch every lane whose inputs have merged, up to `max_lanes` at once. For each:
 
-1. No scaffold: `git worktree add <repo>-wt/<set>-<lane> -b feat/<set>-<lane> <integration head>`.
+1. No scaffold: `git worktree add <repo>-wt/<set>-<lane> -b feat/<set>-<lane> <integration head>`. With
+   it, a lane launched after the scaffold ran branches at that older head: merge the integration head into
+   its branch before launch.
 2. **In the same turn as the launch,** write its Agents row: id, worktree, branch and base, test DB,
    brief, effort (and model), time.
 3. Launch one background agent. Use `general-purpose` or the project's best-fit implementation agent,
@@ -187,7 +205,9 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
    choose the focus from the module's risks (its invariants, the screens with the most states, new routes,
    new cross-package dependencies).
 3. Launch its **independent verifier** in the same worktree (role "Independent verifier": effort high,
-   model `agents.verifier_model`, the agent type from the focus list or the project's reviewer). Prompt:
+   model `agents.verifier_model`, the agent type from the focus list or the project's reviewer; when the
+   focus list names several types, one verifier per type, split by file ownership, `_shared-triage.md`).
+   Prompt:
    read `context/batch-briefs/_verify.md`; the lane's hand-back, as claims to check rather than trust; the
    focus list. Record the verifier's Agents row in the same turn.
 
@@ -198,7 +218,7 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
   pass; otherwise hold the lane and record why.
 
 ### 5. Merge (orchestrator only)
-1. `git merge --no-ff feat/<set>-<lane>` into the integration branch.
+1. `git merge --no-ff <lane branch>` (its Agents row; `feat/<set>-<lane>`) into the integration branch.
 2. **Conflicts:**
    - Lockfile: re-run the install, then check with the frozen-lockfile flag. Never hand-edit a lockfile.
    - Test helpers and maps: keep both sides' entries.
@@ -227,8 +247,12 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
 ## Final phase: once, on the final head, in this order
 
 ### 1. Cut-end checks
-Run `tiers.cut_end`: the invariant gates first (those that run `invariant_suites`), then the rest of the
-tier, heavy gates through their slot. A red here is CRITICAL for the combined final. No profile (v1): skip.
+1. **The invariant suites, first:** `commands.test_task` with `{files}` = every `invariant_suites` path, in
+   one call (skip this only when a `tiers.cut_end` gate already runs exactly those suites; run that gate
+   first instead). They run every cut, whatever else the tier holds.
+2. **Then the rest of `tiers.cut_end`,** in order, heavy gates through their slot.
+
+A red here is CRITICAL for the combined final. No profile (v1): skip; the full run (step 3) covers them.
 
 ### 2. One combined final (code and behaviour)
 Run `/verify-implementation --all` in its default 2-agent form (A: code, B: behaviour), with the cut-end

@@ -1,6 +1,6 @@
 ---
 set: <set name, e.g. ss>
-workflow_version: <$WORKFLOW_HOME/VERSION at Phase 0, e.g. 2.0.0; never changed mid-batch>
+workflow_version: <"${WORKFLOW_HOME:-$HOME/.claude/workflow-release}/VERSION" at Phase 0, e.g. 2.0.0; never changed mid-batch>
 integration_branch: <branch the lanes branch from and merge into>
 base_sha: <sha the first lanes branch from>
 started: <YYYY-MM-DD>

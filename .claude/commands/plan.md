@@ -1,9 +1,9 @@
 ---
-description: Interactive planning command that transforms an initial idea into a comprehensive, implementation-ready plan. Gathers requirements through clarifying questions, generates structured plan, and auto-invokes /analyze-plan for gap detection and iterative refinement.
+description: Interactive planning command that transforms an initial idea into a comprehensive, implementation-ready plan. Gathers requirements through clarifying questions, generates structured plan, and auto-invokes /analyze-plan for one review round of gap detection and fixes.
 ---
 # Plan Command
 
-Transform an initial idea into a comprehensive, implementation-ready plan through structured discovery and iterative refinement.
+Transform an initial idea into a comprehensive, implementation-ready plan through structured discovery and one review round.
 
 **Workflow**: `/plan → /recommend-agents → /blueprint (with /design-ui for UI modules) → /implement-plan → /verify-implementation → /commit`
 
