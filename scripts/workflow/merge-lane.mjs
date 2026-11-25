@@ -23,8 +23,9 @@ Steps (--apply; without it, each is printed and conflicts are predicted with git
      (--keep-conflict leaves it in progress for a resolution by hand) and the exit is 2.
   3. merge.renumber, when the profile defines it, with {base} = the integration head before the
      merge: it puts the lane's colliding migrations after the integration head's. If it changes
-     the tree, the change is committed ("chore(merge): renumber migrations from <lane>"). Then
-     merge.check, when defined, verifies the journal.
+     the tree, the change is committed ("chore(merge): renumber migrations from <lane>"; files
+     that were untracked before it ran are never staged). Then merge.check, when defined, verifies
+     the journal, with the same placeholders.
   4. tiers.merge, through the tier runner (heavy gates through slot.sh unless self-locking; an
      agent gate is listed for the orchestrator to launch, never run). Skipped when
      --verified-head equals the lane head, that head contains the integration head, and the
@@ -117,7 +118,7 @@ export async function main(argv) {
     res.conflicts = conflicts;
     lines.push(`  merge: git merge --no-ff ${flags.lane}${conflicts === null ? ' (conflict prediction needs git >= 2.38)' : conflicts.length ? `: ${conflicts.length} conflict(s)` : ': no conflict predicted'}`);
     if (conflicts?.length) lines.push(`  conflicts: ${conflicts.slice(0, 6).join(', ')}${conflicts.length > 6 ? ` +${conflicts.length - 6} more` : ''}`);
-    lines.push(`  renumber: ${renumber ? fill(renumber, values).cmd : 'none defined'} · check: ${check || 'none defined'}`);
+    lines.push(`  renumber: ${renumber ? fill(renumber, values).cmd : 'none defined'} · check: ${check ? fill(check, values).cmd : 'none defined'}`);
     const steps = profile ? planTier(profile, 'merge', values) : null;
     lines.push(
       `  tiers.merge: ${!steps ? 'none (v1: by hand)' : canSkip ? `would skip if the renumber changes nothing (verifier green on ${short(laneHead)}, which contains ${short(intoBefore)})` : tierLine(steps.map((s) => ({ ...s, status: s.status === 'run' ? 'would-run' : s.status })))}`,
@@ -151,13 +152,18 @@ export async function main(argv) {
   if (renumber) {
     const f = fill(renumber, values);
     if (f.missing.length) return finish(1, `RED: merge.renumber needs {${f.missing.join('}, {')}}`);
+    // Untracked files that were already there are not the renumber's: never commit them.
+    const untracked = () => new Set(git(repo, 'ls-files', '--others', '--exclude-standard', '-z').out.split('\0').filter(Boolean));
+    const before = untracked();
     const r = runShell(f.cmd, { prefix, cwd: repo });
     if (r.code !== 0) {
       lines.push(`  renumber: FAIL exit ${r.code}: ${(r.stderr || r.stdout).trim().split('\n').pop() || ''}`);
       return finish(1, 'RED: merge.renumber (the merge commit stays)');
     }
-    if (git(repo, 'status', '--porcelain').out) {
-      git(repo, 'add', '-A');
+    git(repo, 'add', '-u');
+    const added = [...untracked()].filter((p) => !before.has(p));
+    if (added.length) git(repo, 'add', '--', ...added);
+    if (git(repo, 'diff', '--cached', '--quiet').code !== 0) {
       const c = git(repo, 'commit', '-q', '-m', `chore(merge): renumber migrations from ${flags.lane}`);
       if (c.code !== 0) return finish(1, `RED: committing the renumber failed: ${c.err.split('\n')[0]}`);
       renumbered = true;
@@ -165,7 +171,9 @@ export async function main(argv) {
     } else lines.push('  renumber: no change');
   }
   if (check) {
-    const r = runShell(check, { prefix, cwd: repo });
+    const c = fill(check, values);
+    if (c.missing.length) return finish(1, `RED: merge.check needs {${c.missing.join('}, {')}}`);
+    const r = runShell(c.cmd, { prefix, cwd: repo });
     lines.push(`  check: ${r.code === 0 ? 'pass' : `FAIL exit ${r.code}`}`);
     if (r.code !== 0) return finish(1, 'RED: merge.check (the merge commit stays)');
   }
