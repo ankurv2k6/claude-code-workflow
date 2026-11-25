@@ -232,7 +232,7 @@ test('profile-check --smoke --install-first runs install, then build, before the
 
 test('profile: test_db.url renders {url} with credentials; it must name {host} and {name}', async () => {
   const { dbUrl } = await import('../lib/profile.mjs');
-  assert.equal(dbUrl({ host: 'localhost', port: 5437, url: 'postgresql://u:p@{host}:{port}/{name}' }, 'x_test'), 'postgresql://u:p@localhost:5437/x_test');
+  assert.equal(dbUrl({ host: 'localhost', port: 6543, url: 'postgresql://u:p@{host}:{port}/{name}' }, 'x_test'), 'postgresql://u:p@localhost:6543/x_test');
   assert.equal(dbUrl({}, 'x_test'), 'postgresql://127.0.0.1:5432/x_test', 'the default template');
   const p = example();
   p.test_db.url = 'postgresql://u:p@db.elsewhere:5432/{name}';
