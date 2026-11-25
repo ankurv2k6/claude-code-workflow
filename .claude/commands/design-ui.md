@@ -1,6 +1,6 @@
 ---
 name: design-ui
-description: Generate detailed wireframes (Markdown + ASCII) from architecture or implementation plans. Discovers and follows the project's existing design system, rules, and conventions automatically. Add --with-mockups to also generate interactive HTML/CSS/JS mockups. Add --verify to run a detailed audit and auto-fix pass on existing wireframes and mockups.
+description: Generate detailed wireframes (Markdown + ASCII) from architecture or implementation plans, and write each UI module's blueprint §4 and Design Sync table. Runs after the blueprint's contracts are LOCKED and before the UI module blueprints. Discovers and follows the project's existing design system, rules, and conventions automatically. Add --with-mockups to also generate interactive HTML/CSS/JS mockups. Add --verify to run a detailed audit and auto-fix pass on existing wireframes and mockups.
 ---
 # Design UI
 
@@ -12,14 +12,19 @@ description: Generate detailed wireframes (Markdown + ASCII) from architecture o
 | (none) | Auto-detect plan, wireframes only |
 | `--with-mockups` | Wireframes + interactive HTML |
 | `--mockups-only` | Mockups from existing wireframes |
-| `--module <name>` | Single module only |
+| `--module <name or M-ID>` | Single module only |
 | `--update` | Update wireframes from revised plan |
 | `--verify` | Audit + auto-fix wireframes/mockups |
-| `--sync-blueprints` | Sync UI specs from wireframes/mockups back to blueprints |
 | `--guide` | Output Design Input Guide |
-| `--areas=<n>` | Screens per area agent (default 3–6, grouped by feature) |
+| `--areas=<n>` | Screens per area agent (default 3–6, grouped by module, then feature) |
 
-**Mode detection**: Default = wireframes-only | `--with-mockups` = full | `--mockups-only` = mockups | `--verify` = verify | `--sync-blueprints` = enrich
+**Mode detection**: Default = wireframes-only | `--with-mockups` = full | `--mockups-only` = mockups | `--verify` = verify
+
+**Where it runs:** after `/blueprint` has LOCKED its central files and contracts (its Phase 3C), and before
+the UI module blueprints are written. **The designer writes each UI module's §4 and its UI Design Sync table**
+(Phase 6), once; the module's blueprint writer links §4 and never rewrites it. There is no separate sync or
+re-sync step. With no blueprint set yet, design runs from the plan and Phase 6 is skipped; `/blueprint` later
+calls `/design-ui --module <M-ID>` to write §4.
 
 ---
 
@@ -30,7 +35,7 @@ If `--guide`, print and stop:
 REQUIRED: Architecture/implementation plan (.md). Use /plan to generate if needed.
 RECOMMENDED: Design rules (*ui*rules*, *design*rules*), design system CSS, safety rules
 OUTPUT: design/wireframes/{Feature}/*.md, design/mockups/{Feature}/*.html (with --with-mockups)
-WORKFLOW: /plan → /design-ui → review → /design-ui --with-mockups → test → iterate
+WORKFLOW: /plan → /blueprint (contracts LOCKED) → /design-ui (writes UI §4) → UI module blueprints → build
 ```
 
 ---
@@ -39,7 +44,9 @@ WORKFLOW: /plan → /design-ui → review → /design-ui --with-mockups → test
 
 ### 1A-B: Locate & Parse Plan
 Find: `$ARGUMENTS` → `context/blueprints/blprnt-M*.md` → `context/plans/*.md` → `~/.claude/plans/*.md`
-Extract: UI requirements (pages, modals, dialogs), user flows, state machines, data models
+Extract: UI requirements (pages, modals, dialogs), user flows, state machines, data models, and from the plan's
+MVP paragraph (§0): the acceptance scenario, the interaction model, the entry states and the UI words. With a
+blueprint set, read the LOCKED contracts (`impl-contracts.md`) for the fields and refusals each screen shows.
 
 ### 1C: Discover Design Context
 Limits: max 10 files/glob, 3 levels deep, early-exit after 3 format examples
@@ -47,6 +54,7 @@ Limits: max 10 files/glob, 3 levels deep, early-exit after 3 format examples
 | Discovery | Patterns |
 |-----------|----------|
 | Project overview | `CLAUDE.md`, `README.md`, `package.json` |
+| UI brief | the profile's `docs.ui_brief` when set (`~/.claude/commands/_shared-project-profile.md`), else a UI section of CLAUDE.md or `design/**/*brief*.md` |
 | Design rules | `**/*ui*rules*`, `**/*design*rules*`, `**/*style*guide*` |
 | Safety rules | `**/*safety*rules*`, `**/*compliance*`, `**/*coppa*`, `**/*wcag*` |
 | Design system | `**/shared/css/*.css`, `**/design/*.css`, `**/tokens/**` |
@@ -77,7 +85,21 @@ Types: Page, Modal, Dialog, Overlay, Toast, Sidebar, Drawer, Panel, Card, Sectio
 Priority: P0 (critical), P1 (important), P2 (nice-to-have)
 
 ### 2B-C: User Flows & State Matrix
-Document entry screen → transitions → error paths. Enumerate states per screen (Default, Loading, Error, Empty, Success, Disabled, Hover, Focus, Active).
+Document entry screen → transitions → error paths. Every screen in the acceptance scenario carries these
+states, each one a row in its wireframe and a `?state=` in its mockup:
+
+| State | Is |
+|---|---|
+| the scenario's own | each step of the acceptance scenario, in the plan's interaction model (e.g. streaming, job running, done) |
+| entry: at rest | how the user finds the screen with nothing in progress |
+| entry: after reload | what a refresh or a new session shows mid-task |
+| empty | first use, nothing yet |
+| loading | waiting on data |
+| error | a failure the user can act on |
+| refusal | the system says no: a permission, a limit, a rule or a validation refusal, in the user's words |
+
+Other screens carry the states that apply. Interaction states (Hover, Focus, Active, Disabled) come from the
+shared components.
 
 ### 2D-E: Responsive & Naming
 Use existing breakpoints or defaults based on device target. Follow existing naming convention or default: `design/wireframes/{Feature}/01_screen.md`
@@ -91,7 +113,8 @@ Before any screen, write `design/wireframes/_<set>-brief.md` (or extend the proj
 - **three tiers:** **Show** (the main information for this page's job), **On demand** (one deliberate
   action away: a drawer, a "Details" disclosure, a tooltip-free help line), **Omit** (not needed in
   this context);
-- the shared patterns every screen reuses (navigation, confirms, empty and error states).
+- the shared patterns every screen reuses (navigation, confirms, empty, error and refusal states);
+- the UI words from the plan's MVP paragraph, checked against the UI brief; screens use these words only.
 
 Every wireframe then carries an **Information decisions** table, one row per item considered:
 
@@ -119,8 +142,8 @@ Every screen then builds on these, so screens match each other by construction.
 
 See `_shared-autonomous.md`. **Skip in mockups-only mode.**
 
-Group screens into **areas of 3–6 screens** by feature or flow, and launch one background agent per
-area. Use effort high (row "Design area: wireframes"; a project or user rule overrides), with no turn cap and no
+Group screens into **areas of 3–6 screens**, by UI module where possible (so one designer owns each module's
+§4), then by feature or flow, and launch one background agent per area. Use effort high (row "Design area: wireframes"; a project or user rule overrides), with no turn cap and no
 wall-clock timeout. Completion comes by notification (`_shared-agent-timeout.md`). Each agent reads the
 brief and the foundation once, and reports in 15 lines or fewer.
 
@@ -136,6 +159,7 @@ Each wireframe includes:
 
 **Output:** `design/wireframes/{Feature}/{XX_screen}.md`, plus `design/wireframes/{Feature}/README.md`
 per module. State lives on disk: if your context is summarized, glob the wireframes and continue.
+In wireframes-only mode, each area agent then writes its modules' §4 (Phase 6).
 
 ---
 
@@ -145,7 +169,7 @@ per module. State lives on disk: if your context is summarized, glob the wirefra
 Use area agents as in Phase 4, but at effort medium (row "Design area: mockups"): a mockup renders
 decisions its wireframe already made.
 
-Each standalone HTML:
+In full mode, the mockup area agent writes its modules' §4 (Phase 6) after its mockups. Each standalone HTML:
 - **Styling:** the project's own design-system sheet(s) and fonts from Phase 3. Add Tailwind only if the
   project already uses it.
 - **States the browser can reach:** every state in the wireframe is selectable with `?state=<name>`, and
@@ -163,19 +187,70 @@ Each standalone HTML:
 
 ### 5b: Consolidation pass
 One agent reconciles across areas: shared components used the same way, copy and terminology
-consistent, every screen in `INDEX.md`, the brief's Omit tier respected. Areas written in parallel drift;
-this catches it before `--sync-blueprints`.
+consistent (the UI words), every screen in `INDEX.md`, the brief's Omit tier respected. Areas written in
+parallel drift; this catches it. It writes `context/implementation/ui-mapping.md` (one row per component), and
+edits a §4 only where its own fix changes that screen.
 
-### 5c: Accessibility check
-A **separate** agent from the one that chose colours (row "Accessibility check") verifies AA contrast and
-keyboard completeness on the mockups.
+### 5c: Accessibility check (once)
+A **separate** agent from the ones that chose colours (row "Accessibility check"; the agent choosing colours
+never signs off its own contrast) verifies AA contrast and keyboard completeness, **once per design set**: on
+the mockups, or on the wireframes' token pairs and focus order in wireframes-only mode. It writes the
+Accessibility row of each UI Design Sync table and its report path; its HIGH findings go to one fix agent, and
+it is not re-run for them.
 
 ---
 
-## Phase 6: Documentation
+## Phase 6: Write the UI module's §4 and Design Sync table
 
-- **Wireframes**: Ensure `design/wireframes/{Feature}/README.md` exists
-- **Mockups** (full/mockups): Update `design/mockups/INDEX.md`, verify cross-references
+**Skip when there is no blueprint set** (see "Where it runs"). Otherwise, for each UI module (master S5
+`type: ui`), the last design agent for its area in this run (wireframes-only: the wireframe agent; full: the
+mockup agent) writes §4 of `context/blueprints/blprnt-{M-ID}-{name}.md`, once. If the module file does not exist
+yet, it creates it with only the header line and §4; the module's writer adds the rest around it.
+
+**Link the wireframe; don't copy it.** Copied ASCII trees and style objects pushed module manifests past budget
+(`_shared-effort-budget.md`: 14k tokens per module).
+
+```markdown
+## 4. UI (written by /design-ui)
+### 4A. Component: {ComponentName}
+**Source**: design/wireframes/{Feature}/{XX}_{component}.md (layout, Information decisions)
+**Mockup**: design/mockups/{Feature}/{XX}_{component}.html — states: at-rest, after-reload, empty, loading, error, refusal, {scenario states}
+**Show**: {item} · {item} — **On demand**: {item} — **Omitted**: {item}
+**Words**: {the UI words this component shows}
+| Property | Token | Source |
+|----------|-------|--------|
+| Background | --surface | mockup |
+| Padding | --space-4 | wireframe §Layout |
+
+### 4B. States
+| State | Trigger | What the user sees |
+|-------|---------|--------------------|
+| at rest | no task in progress | — |
+| after reload | refresh mid-task | {what survives} |
+| empty | no items yet | {empty copy} |
+| loading | awaiting data | {skeleton or progress} |
+| error | request failed | {message, retry} |
+| refusal | permission, limit or rule says no | {refusal copy, next step} |
+| {scenario step} | {trigger} | {visual} |
+
+Responsive: {breakpoint → change} · Accessibility: focus order {list}; ARIA {roles}; keyboard {keys}
+
+### 4C. UI Design Sync
+| Asset | Status | Written |
+|-------|--------|---------|
+| Wireframes | ✅ / ⚠️ Missing | [date, agent] |
+| Mockups | ✅ / ⚠️ Missing / N/A | [date, agent] |
+| §4 | ✅ Written | [date, agent] |
+| Accessibility | ✅ Checked / ⚠️ Findings open | [date, 5c report path] |
+```
+
+Tokens are **theme tokens**, never raw hex: map each value to the token the shared sheet defines; a value with
+no token is a design-system gap to report, not a literal to copy. A UI module that also owns data keeps its
+tables in §4D, which the module's writer owns. The impl spec's UI tasks are the module writer's: they link §4,
+the wireframes and the mockup states.
+
+**Documentation:** ensure `design/wireframes/{Feature}/README.md` exists; in full or mockups mode update
+`design/mockups/INDEX.md` and verify cross-references.
 
 ---
 
@@ -187,7 +262,9 @@ keyboard completeness on the mockups.
 | Files | All planned files created |
 | Design compliance | Uses design system consistently, touch targets |
 | Safety | Content constraints, age-appropriate, data minimization |
-| Accessibility | Semantic HTML, ARIA, keyboard nav, color contrast 4.5:1, focus indicators, reduced-motion |
+| Accessibility | 5c's report: semantic HTML, ARIA, keyboard nav, color contrast 4.5:1, focus indicators, reduced-motion (not re-checked here) |
+| States | every acceptance-scenario screen has the 2B-C states, each reachable with `?state=` |
+| §4 | every UI module has §4 and a UI Design Sync table (Phase 6) |
 
 ---
 
@@ -199,7 +276,7 @@ If none found: abort, suggest running `/design-ui` first.
 
 **Agents for verify mode** (`_shared-effort-budget.md`):
 - **2 verifiers split by file ownership:** one for wireframes plus plan coverage, one for mockups. Never one agent per file.
-- **Plus the separate accessibility check** (5c).
+- **The accessibility check is 5c's,** run once: reused here, and re-run only for mockups changed since it ran.
 - Background, no turn caps or timeouts, completion by notification (`_shared-agent-timeout.md`).
 - Structural checks (file exists, every screen in `INDEX.md`, relative paths resolve) are a script, not an agent.
 
@@ -267,167 +344,9 @@ For each mockup in `design/mockups/{Feature}/` with an implemented screen:
 - `IMPL-STRUCT-*` and `IMPL-STATE-*` are HIGH: give the missing element or state handler and its expected behaviour.
 - `IMPL-STYLE-*` is LOW: log it, and suggest the theme token (never a hex literal).
 
-### VI: Blueprint Enrichment Mode (`--sync-blueprints`)
-
-When wireframes/mockups are finalized, sync UI specifications back to blueprints to ensure
-implementation specs are complete and precise.
-
-**Trigger**: `--sync-blueprints` flag OR automatic when `--verify` finds UI modules
-
-**For each UI module (blueprint declares `type: ui`)**:
-
-#### 1. Locate Blueprint Files
-- Blueprint: `context/blueprints/blprnt-{M-ID}-{name}.md`
-- Impl spec: `context/implementation/impl-{M-ID}-{name}.md`
-
-#### 2. Extract UI Specifications from Wireframes
-For each wireframe in `design/wireframes/{Feature}/*.md`:
-
-**Parse and extract**:
-- Component name and type (page, modal, card, etc.)
-- ASCII layout structure → element hierarchy
-- Dimensions (width, height, padding, margins)
-- States enumerated (default, loading, error, empty, success, disabled)
-- Responsive breakpoints
-- Accessibility requirements (WCAG level, ARIA, focus order)
-- Typography specs
-- Color references
-
-#### 3. Extract UI Specifications from Mockups
-For each mockup in `design/mockups/{Feature}/*.html`:
-
-**Parse and extract** (as **theme tokens**, never raw hex: map each value to the token the shared sheet defines; a value with no token is a design-system gap to report, not a literal to copy):
-- Colour, spacing and type tokens used
-- Font families, sizes, weights
-- Border radii, shadows
-- Transition/animation durations
-- Interactive states (hover, focus, active styles)
-- Z-index layering
-- Icon references
-
-#### 4. Update Blueprint §4 (Component Specifications)
-
-Inject extracted specs into blueprint component section. **Link the wireframe; don't copy it.** Copied ASCII trees and style objects pushed module manifests past budget (`_shared-effort-budget.md`: 14k tokens per module); keep §4A to what implementation needs at a glance:
-
-```markdown
-### Component: {ComponentName}
-
-**Source**: design/wireframes/{Feature}/{XX}_{component}.md (layout, Information decisions)
-**Mockup**: design/mockups/{Feature}/{XX}_{component}.html — states: default, loading, error, empty
-
-#### Show items (from the Information decisions table)
-- {item} · {item} — On demand: {item} — Omitted: {item}
-
-#### Design Tokens
-| Property | Token | Source |
-|----------|-------|--------|
-| Background | --surface | mockup |
-| Primary Text | --ink | mockup |
-| Padding | --space-4 / --space-5 | wireframe §Layout |
-| Border Radius | --radius-sm | mockup |
-
-#### States
-| State | Trigger | Visual Changes |
-|-------|---------|----------------|
-| default | initial | — |
-| loading | isLoading=true | spinner, disabled inputs |
-| error | hasError=true | red border, error message |
-| empty | items.length===0 | empty state illustration |
-| success | onSuccess | green checkmark, fade out |
-
-#### Responsive
-| Breakpoint | Changes |
-|------------|---------|
-| ≤480px | Stack vertically, full width |
-| ≤768px | Reduce padding to 12px |
-
-#### Accessibility
-- WCAG AA contrast: verified
-- Focus order: {list}
-- ARIA: role="dialog", aria-modal="true"
-- Keyboard: Tab navigation, Escape to close
-```
-
-#### 5. Update Implementation Spec §4 (Tasks)
-
-For each component task, add precise implementation details:
-
-```markdown
-### Task 4.2: Implement {ComponentName}
-
-**Wireframe**: design/wireframes/{Feature}/{XX}_{component}.md
-**Mockup**: design/mockups/{Feature}/{XX}_{component}.html
-
-**Implementation Requirements** (extracted from mockup):
-
-1. Element Structure:
-   - Root: `<div role="dialog" aria-modal="true">`
-   - Header: `<header>` with close button
-   - Body: `<div>` with form content
-   - Footer: `<footer>` with action buttons
-
-2. Styles: the shared components and theme tokens named in the blueprint's Design Tokens table. No colour literals.
-
-3. States to Implement (each reachable in the mockup with `?state=`):
-   - [ ] Default state
-   - [ ] Loading state (spinner, disabled form)
-   - [ ] Error state (error banner, field highlights)
-   - [ ] Success state (checkmark animation, auto-close)
-
-4. Interactions:
-   - Hover / focus / disabled: as the shared components and tokens define them
-
-**Completion Criteria**:
-- [ ] All Show items from the Information decisions table present; nothing it omits
-- [ ] Screenshot pairs (mockup vs app) match in every state above (`_shared-ui-parity.md`)
-- [ ] All interactions work
-- [ ] Accessibility verified
-```
-
-#### 6. Generate Mapping File
-
-Create `context/implementation/ui-mapping.md`:
-
-```markdown
-# UI Component Mapping
-
-| Component | Wireframe | Mockup | Blueprint | Impl Spec | Status |
-|-----------|-----------|--------|-----------|-----------|--------|
-| ConnectGitHub | 02_connect_github.md | 01_connect_github.html | blprnt-M9 §4.1 | impl-M9 §4.2 | ✅ Synced |
-| IssueList | 03_linked_issues_list.md | 02_linked_issues_list.html | blprnt-M10 §4.1 | impl-M10 §4.3 | ✅ Synced |
-| CreateModal | 05_create_issue_modal.md | 03_create_issue_modal.html | blprnt-M11 §4.2 | impl-M11 §4.4 | ⚠️ Partial |
-```
-
-#### 7. Validation
-
-After enrichment, verify:
-- [ ] All wireframe components have blueprint entries
-- [ ] All mockup styles map to theme tokens in the blueprints (gaps reported, not copied as literals)
-- [ ] Each UI module's manifest stays within budget (detail linked, not copied)
-- [ ] All states from wireframes are listed in tasks
-- [ ] No placeholder or TBD sections remain
-
-**Output**:
-```
-BLUEPRINT ENRICHMENT REPORT
-===========================
-Module: M9 (ui-auth)
-Wireframes analyzed: 2
-Mockups analyzed: 2
-Blueprint sections updated: 3
-Impl spec tasks enriched: 4
-Tokens mapped: 47 (gaps: 0)
-States documented: 8
-
-SYNC STATUS: ✅ COMPLETE
-Blueprint now contains precise UI specifications from finalized designs.
-```
-
-**Error Handling**:
-- Missing wireframe for component: WARN, create stub entry
-- Mockup CSS parse error: WARN, include raw values
-- Blueprint section not found: CREATE new section
-- Conflicting values: WARN, use mockup as source of truth
+### VI: §4 findings
+A verify finding against a UI module's §4 or its UI Design Sync table goes to the designer of that module
+(`/design-ui --module <M-ID>`), which edits §4 in place. There is no separate sync step.
 
 ---
 
@@ -436,13 +355,14 @@ Blueprint now contains precise UI specifications from finalized designs.
 ```
 DESIGN UI REPORT
 PROJECT: [name] | PLAN: [path] | MODE: [mode] | DATE: [timestamp]
-Agents: Foundation ✓ | Areas X✓ Y⚠ | Consolidation ✓ | A11y ✓
+Agents: Foundation ✓ | Areas X✓ Y⚠ | Consolidation ✓ | A11y ✓ (once)
 (If an area agent failed: "Area {name} incomplete; re-run /design-ui --module {Feature}")
 
 DELIVERABLES
   Wireframes: X files | Mockups: Z files (states reachable via ?state=) | Shared: N files | Docs: M files
   Brief: design/wireframes/_<set>-brief.md | Information decisions tables: X/X
-  Screens: X (A pages, B modals, C dialogs) | States: Y
+  Screens: X (A pages, B modals, C dialogs) | States: Y (scenario + entry, empty, loading, error, refusal)
+  §4 written: N/N UI modules | UI Design Sync tables: N
 
 COMPLIANCE: WCAG [level] | Breakpoints: [list]
 
@@ -468,6 +388,7 @@ VERIFY MODE (if applicable)
 9. **Declutter by decision** — every item is Show, On demand or Omit, decided per page (2G)
 10. **Foundation first, then areas** — shared sheets and chrome before any screen; one agent per area, not per screen
 11. **States are addressable** — every state reachable with `?state=`, so parity can be proven in a browser
+12. **Design writes UI §4, once** — after the contracts are LOCKED, before the UI module's blueprint; no sync step
 
 ---
 
@@ -477,6 +398,7 @@ VERIFY MODE (if applicable)
 /design-ui --with-mockups                     # Wireframes + mockups
 /design-ui --mockups-only                     # Mockups from existing wireframes only
 /design-ui --update                           # Update from revised plan
-/design-ui --verify --sync-blueprints         # Verify + sync UI specs to blueprints
+/design-ui --module M7                        # One UI module's screens and its §4
+/design-ui --verify                           # Audit + auto-fix
 /design-ui --guide                            # Show input guide
 ```
