@@ -6,6 +6,7 @@ import { join, basename, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { args, die, abs, readJson, nowStamp, projectRoot, git } from './lib/common.mjs';
+import { frontmatter, readTable, col, stripCode } from './lib/tasklist.mjs';
 
 const USAGE = `build-report.mjs — tokens, cost and time per agent of a build, from the transcripts
 
@@ -14,6 +15,7 @@ Usage:
                         [--project <dir> | --slug <slug>] [--projects-root <dir>]
                         [--prices <file>] [--roles <file>]
                         [--out <file> | --set <set> [--profile <path>]] [--json <file>]
+                        [--breaches] [--critical-path --task-list <path>] [--budget <tokens>]
 
 Reads ~/.claude/projects/<slug>/<session>.jsonl (the orchestrator) and
 <session>/subagents/*.jsonl with their .meta.json (every agent it launched).
@@ -47,6 +49,27 @@ Reads ~/.claude/projects/<slug>/<session>.jsonl (the orchestrator) and
                        from the profile (default "logs"), relative to the project root; this is
                        how /implement-batch and /workflow-sync call it
   --json <file>        also write the per-agent numbers as JSON
+  --breaches           count rule breaches and print them as a table (also added to the report):
+                         - a vitest command with no test path inside a lane worktree (a cwd or
+                           "cd <dir>" under a task-list Worktree, or a "-wt/" path);
+                         - typecheck:clean or tsc --build --force run by a lane;
+                         - a rehearsal command (a profile gate of kind "rehearsal") run by a lane
+                           or a verifier;
+                         - a turn whose context is above limits.context_budget_tokens;
+                         - the orchestrator's average context above 1.5 x that budget (restart it)
+                       A lane is an agent whose description or role says "lane" (not a
+                       verifier); a verifier, one that says "verif".
+  --critical-path      with --task-list: the batch's elapsed time split into building (lanes,
+                       integration fixes, and a verifier's fix work: from its first edit to its
+                       commit), checking (verifiers; the orchestrator's test, typecheck, lint and
+                       build runs), documents (design, blueprint and doc agents), other agents,
+                       and waiting (nothing above running). Roles come from the task list's
+                       Agents rows (Role, matched by Agent id to the transcript file), else the
+                       description. Also the orchestrator's average context, and the time to
+                       owner acceptance (task-list fields started and accepted_on_beta).
+  --task-list <path>   the batch's task list (Agents rows, Worktree paths, started)
+  --budget <tokens>    the context budget (default: the profile's limits.context_budget_tokens,
+                       else 200000)
 
 Per agent: turns (API responses, deduplicated by message id + request id), tokens (input,
 cache write, cache read, output), cost, active minutes (the sum of gaps of at most 10 minutes
@@ -105,7 +128,10 @@ export function parseTime(s) {
   return Date.parse(t);
 }
 
-export function analyzeTranscript(path, prices, { since = null, until = null } = {}) {
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
+const CHECK_CATS = new Set(['test', 'typecheck', 'lint', 'build']);
+
+export function analyzeTranscript(path, prices, { since = null, until = null, budget = null } = {}) {
   const windowed = since !== null || until !== null;
   const inside = (t) => (since === null || t >= since) && (until === null || t <= until);
   let inWin = since === null;
@@ -122,6 +148,13 @@ export function analyzeTranscript(path, prices, { since = null, until = null } =
   let maxCtx = 0;
   let cost = prices ? 0 : null;
   let unpriced = 0;
+  let ctxSum = 0;
+  let overBudget = 0;
+  const commands = [];
+  const marks = []; // { t, edit, commit, check, doc } per timestamped line, for --critical-path
+  const pending = new Map(); // tool_use id -> { name, cat, path }
+  let lastT = null;
+  let cwd = '';
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     let d;
@@ -130,18 +163,33 @@ export function analyzeTranscript(path, prices, { since = null, until = null } =
     } catch {
       continue;
     }
+    if (typeof d.cwd === 'string') cwd = d.cwd;
+    let mark = null;
     if (d.timestamp) {
       const t = Date.parse(d.timestamp);
       if (Number.isFinite(t)) {
         // A line without a timestamp belongs to the window of the last one that had one.
         inWin = !windowed || inside(t);
-        if (inWin) times.push(t);
+        if (inWin) {
+          times.push(t);
+          mark = { t };
+          marks.push(mark);
+          lastT = t;
+        }
       }
     }
     if (!inWin) continue;
     const m = d.message;
     if (d.type === 'user' && Array.isArray(m?.content))
-      for (const x of m.content) if (x?.type === 'tool_result' && x.is_error) toolErrors++;
+      for (const x of m.content) {
+        if (x?.type !== 'tool_result') continue;
+        if (x.is_error) toolErrors++;
+        const p = pending.get(x.tool_use_id);
+        if (p && mark) {
+          if (p.name === 'Bash' && CHECK_CATS.has(p.cat)) mark.check = true;
+          if (EDIT_TOOLS.has(p.name) && /\.md$/i.test(p.path || '')) mark.doc = true;
+        }
+      }
     if (d.type !== 'assistant' || !m) continue;
     for (const x of Array.isArray(m.content) ? m.content : []) {
       if (x?.type !== 'tool_use') continue;
@@ -150,10 +198,17 @@ export function analyzeTranscript(path, prices, { since = null, until = null } =
       seenTool.add(id);
       toolCalls++;
       tools[x.name] = (tools[x.name] || 0) + 1;
+      const info = { name: x.name, path: x.input?.file_path || x.input?.notebook_path || '' };
       if (x.name === 'Bash') {
-        const c = bashCategory(String(x.input?.command || ''));
+        const command = String(x.input?.command || '');
+        const c = bashCategory(command);
         bash[c] = (bash[c] || 0) + 1;
+        info.cat = c;
+        commands.push({ cmd: command, cwd, t: lastT });
+        if (mark && /\bgit\b[^|;&]*\bcommit\b/.test(command)) mark.commit = true;
       }
+      if (mark && EDIT_TOOLS.has(x.name)) mark.edit = true;
+      pending.set(id, info);
     }
     const key = `${m.id}|${d.requestId}`;
     if (seenMsg.has(key)) continue;
@@ -163,7 +218,10 @@ export function analyzeTranscript(path, prices, { since = null, until = null } =
     turns++;
     models[m.model] = (models[m.model] || 0) + 1;
     for (const k of TOKEN_KEYS) usage[k] += u[k] || 0;
-    maxCtx = Math.max(maxCtx, (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0));
+    const ctx = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    maxCtx = Math.max(maxCtx, ctx);
+    ctxSum += ctx;
+    if (budget && ctx > budget) overBudget++;
     if (prices) {
       const c = messageCost(prices, m.model, u);
       if (c === null) unpriced++;
@@ -191,10 +249,14 @@ export function analyzeTranscript(path, prices, { since = null, until = null } =
     bash,
     toolErrors,
     maxCtx,
+    avgCtx: turns ? Math.round(ctxSum / turns) : 0,
+    overBudget,
     model,
     models,
     cost,
     unpriced,
+    commands,
+    marks,
   };
 }
 
@@ -220,12 +282,12 @@ export function mainCheckout(dir) {
 
 const hasActivity = (a) => a.turns > 0 || a.toolCalls > 0;
 
-export function collect({ projectDir, sessions, prices, roles, window = {} }) {
+export function collect({ projectDir, sessions, prices, roles, window = {}, budget = null }) {
   const windowed = window.since != null || window.until != null;
   const agents = [];
   for (const s of sessions) {
     const main = join(projectDir, `${s}.jsonl`);
-    if (existsSync(main)) agents.push({ kind: 'main', session: s, description: `main ${s.slice(0, 8)}`, ...analyzeTranscript(main, prices, window) });
+    if (existsSync(main)) agents.push({ kind: 'main', session: s, description: `main ${s.slice(0, 8)}`, ...analyzeTranscript(main, prices, { ...window, budget }) });
     const subDir = join(projectDir, s, 'subagents');
     let files = [];
     try {
@@ -244,7 +306,8 @@ export function collect({ projectDir, sessions, prices, roles, window = {} }) {
         session: s,
         description: meta.description || basename(f, '.jsonl'),
         agentType: meta.agentType || '',
-        ...analyzeTranscript(p, prices, window),
+        file: basename(f, '.jsonl'),
+        ...analyzeTranscript(p, prices, { ...window, budget }),
       });
     }
   }
@@ -308,6 +371,198 @@ export function renderMarkdown(agents, { slug, sessions, pricesPath, rolesPath, 
   return L.join('\n');
 }
 
+// ---------- rule breaches (--breaches) ----------
+
+const isLane = (a) => a.kind === 'sub' && /\blane\b/i.test(`${a.description} ${a.role}`) && !/verif/i.test(`${a.description} ${a.role}`);
+const isVerifier = (a) => a.kind === 'sub' && /verif/i.test(`${a.description} ${a.role}`);
+
+const VITEST_VALUE_FLAGS = new Set(['--project', '--config', '-c', '--root', '-r', '--dir', '--reporter', '--shard', '--pool', '--environment', '-t', '--testNamePattern', '--outputFile']);
+
+/** A vitest invocation in the command that names no test path (a whole-project run). */
+export function vitestWithoutPath(cmd) {
+  for (const seg of String(cmd).split(/&&|\|\||[;|\n]/)) {
+    const toks = seg.trim().split(/\s+/);
+    const i = toks.findIndex((x) => /(^|\/)vitest$/.test(x));
+    if (i < 0) continue;
+    let pathGiven = false;
+    for (let j = i + 1; j < toks.length; j++) {
+      const x = toks[j].replace(/^['"]|['"]$/g, '');
+      if (['run', 'related', 'watch', 'bench', 'dev'].includes(x) && j === i + 1) continue;
+      if (x.startsWith('-')) {
+        if (VITEST_VALUE_FLAGS.has(x)) j++;
+        continue;
+      }
+      if (x.includes('/') || /\.(test|spec)\.|\.[cm]?[jt]sx?$/.test(x)) pathGiven = true;
+    }
+    if (!pathGiven) return true;
+  }
+  return false;
+}
+
+/** The directory a command runs in: a leading "cd <dir> &&", else the line's cwd. */
+const effectiveCwd = (c) => {
+  const m = String(c.cmd).match(/^\s*cd\s+("[^"]+"|'[^']+'|\S+)\s*(&&|;)/);
+  return m ? m[1].replace(/^['"]|['"]$/g, '') : c.cwd || '';
+};
+
+export function findBreaches(agents, { worktrees = [], rehearsals = [], budget = 200000 } = {}) {
+  const inLaneWt = (dir) => !!dir && (worktrees.some((w) => dir === w || dir.startsWith(`${w}/`)) || /-wt\//.test(`${dir}/`));
+  const rows = [
+    { id: 'vitest-no-path', breach: 'vitest with no test path inside a lane worktree', hits: [] },
+    { id: 'clean-typecheck', breach: 'typecheck:clean or tsc --build --force run by a lane', hits: [] },
+    { id: 'rehearsal', breach: 'rehearsal command run by a lane or verifier', hits: [] },
+    { id: 'over-budget', breach: `turn above the context budget (${n(budget)})`, hits: [] },
+    { id: 'orchestrator-context', breach: `orchestrator average context above 1.5 x budget (${n(budget * 1.5)}): restart it`, hits: [] },
+  ];
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  for (const a of agents) {
+    for (const c of a.commands || []) {
+      if (vitestWithoutPath(c.cmd) && (inLaneWt(effectiveCwd(c)) || isLane(a))) by['vitest-no-path'].hits.push(a.description);
+      if (isLane(a) && /typecheck:clean|\btsc\b[^|;&]*(--build|\s-b\b)[^|;&]*--force/.test(c.cmd)) by['clean-typecheck'].hits.push(a.description);
+      if ((isLane(a) || isVerifier(a)) && rehearsals.some((r) => r && c.cmd.includes(r))) by.rehearsal.hits.push(a.description);
+    }
+    for (let i = 0; i < (a.overBudget || 0); i++) by['over-budget'].hits.push(a.description);
+    if (a.kind === 'main' && a.avgCtx > budget * 1.5) by['orchestrator-context'].hits.push(`${a.description} (avg ${n(a.avgCtx)})`);
+  }
+  return rows.map((r) => ({ id: r.id, breach: r.breach, count: r.hits.length, agents: [...new Set(r.hits)] }));
+}
+
+export function breachTable(rows) {
+  const L = ['## Rule breaches', '', '| Breach | Count | Agents |', '|---|---:|---|'];
+  for (const r of rows) L.push(`| ${esc(r.breach)} | ${r.count} | ${esc(r.agents.slice(0, 3).join('; ') + (r.agents.length > 3 ? ` +${r.agents.length - 3}` : '')) || '—'} |`);
+  return L.join('\n');
+}
+
+// ---------- critical path (--critical-path) ----------
+
+/** Role -> part: building, checking, documents, other; the orchestrator is "main". */
+export function partOf(a, rowRole) {
+  if (a.kind === 'main') return 'main';
+  const r = String(rowRole || '').toLowerCase();
+  if (/integration-fix|^lane|\bfix\b/.test(r)) return 'building';
+  if (/verif/.test(r)) return 'checking';
+  if (/design|doc|blueprint/.test(r)) return 'documents';
+  const t = `${a.description} ${a.role || ''}`.toLowerCase();
+  if (/verif|review|audit/.test(t)) return 'checking';
+  if (/\blane\b|\bfix\b|implement|\bbuild/.test(t)) return 'building';
+  if (/design|blueprint|wirefram|mockup|\bdocs?\b|\bplan\b|spec/.test(t)) return 'documents';
+  return 'other';
+}
+
+/** An agent's active segments [start, end, part], gaps over 10 minutes dropped. */
+export function segmentsOf(a, part) {
+  const ms = (a.marks || []).slice().sort((x, y) => x.t - y.t);
+  const out = [];
+  let fixFrom = null; // a verifier's fix work: from its first edit after a commit to the next commit
+  const fixWindows = [];
+  for (const mk of ms) {
+    if (mk.edit && fixFrom === null) fixFrom = mk.t;
+    if (mk.commit && fixFrom !== null) {
+      fixWindows.push([fixFrom, mk.t]);
+      fixFrom = null;
+    }
+  }
+  const inFix = (t0, t1) => fixWindows.some(([f, c]) => t0 >= f && t1 <= c);
+  for (let i = 1; i < ms.length; i++) {
+    const [t0, t1] = [ms[i - 1].t, ms[i].t];
+    if (t1 - t0 > GAP_S * 1000 || t1 <= t0) continue;
+    let p = part;
+    if (part === 'checking' && inFix(t0, t1)) p = 'building';
+    if (part === 'main') p = ms[i].check ? 'checking' : ms[i].doc ? 'documents' : null;
+    if (p) out.push([t0, t1, p]);
+  }
+  return out;
+}
+
+const mergeIntervals = (xs) => {
+  const s = xs.slice().sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [a, b] of s) {
+    if (out.length && a <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+};
+const total = (xs) => xs.reduce((t, [a, b]) => t + (b - a), 0);
+
+export const PARTS = ['building', 'checking', 'documents', 'other'];
+
+/** Elapsed split by priority: time covered by building, then checking, documents, other; the rest is waiting. */
+export function criticalPath(agents, rowRoles = new Map(), { start = null, end = null } = {}) {
+  const segs = [];
+  for (const a of agents) segs.push(...segmentsOf(a, partOf(a, rowRoles.get(a))));
+  const all = agents.flatMap((a) => (a.marks || []).map((m) => m.t));
+  const t0 = start ?? (all.length ? Math.min(...all) : 0);
+  const t1 = end ?? (all.length ? Math.max(...all) : 0);
+  const clip = (xs) => xs.map(([a, b]) => [Math.max(a, t0), Math.min(b, t1)]).filter(([a, b]) => b > a);
+  const res = {};
+  let covered = [];
+  for (const p of PARTS) {
+    const next = mergeIntervals([...covered, ...clip(segs.filter((x) => x[2] === p))]);
+    res[p] = total(next) - total(covered);
+    covered = next;
+  }
+  const elapsed = Math.max(0, t1 - t0);
+  res.waiting = Math.max(0, elapsed - total(covered));
+  res.elapsed = elapsed;
+  return res;
+}
+
+/** Hours between the task list's started and accepted_on_beta, or null. */
+export function acceptanceHours(fm) {
+  const a = parseTime(stripCode(fm.accepted_on_beta || ''));
+  const s = parseTime(stripCode(fm.started || ''));
+  if (!Number.isFinite(a) || !Number.isFinite(s) || a === null || s === null) return null;
+  return Math.round(((a - s) / 3600000) * 10) / 10;
+}
+
+export function criticalPathText(cp, { avgCtx, budget, acceptance }) {
+  const min = (ms) => Math.round((ms / 60000) * 10) / 10;
+  const share = (ms) => (cp.elapsed ? `${Math.round((ms / cp.elapsed) * 100)}%` : '—');
+  const L = ['## Critical path', '', '| Part | Minutes | Share |', '|---|---:|---:|'];
+  const label = { building: 'Building', checking: 'Checking', documents: 'Documents', other: 'Other agents', waiting: 'Waiting' };
+  for (const p of [...PARTS, 'waiting']) L.push(`| ${label[p]} | ${min(cp[p])} | ${share(cp[p])} |`);
+  L.push(`| **Elapsed** | ${min(cp.elapsed)} | 100% |`, '');
+  const breach = avgCtx > budget * 1.5;
+  L.push(`Orchestrator average context: ${n(avgCtx)} (budget ${n(budget)}; restart above ${n(budget * 1.5)})${breach ? ' — **BREACH: restart the orchestrator**' : ''}`);
+  L.push(`Time to owner acceptance: ${acceptance === null ? 'not recorded (task list accepted_on_beta:)' : `${acceptance} h (started to accepted_on_beta)`}`);
+  return L.join('\n');
+}
+
+/** Task-list Agents rows: Agent id -> Role, plus every Worktree path. */
+export function readAgentsRows(text, base) {
+  const t = readTable(text, 'Agents');
+  const roles = new Map();
+  const worktrees = [];
+  if (!t) return { roles, worktrees };
+  const cId = col(t.header, /agent id/i, /^id$/i);
+  const cRole = col(t.header, /^role/i);
+  const cWt = col(t.header, /worktree/i);
+  for (const r of t.rows) {
+    const id = stripCode(r._cells[cId] || '');
+    if (id && cRole >= 0) roles.set(id, stripCode(r._cells[cRole] || ''));
+    const wt = stripCode(r._cells[cWt] || '');
+    if (wt) worktrees.push(resolve(base, wt.replace(/^~(?=\/)/, homedir())));
+  }
+  return { roles, worktrees };
+}
+
+/** The task-list role of each agent, matched by Agent id against its transcript file name. */
+export function rolesByAgent(agents, idRoles) {
+  const m = new Map();
+  for (const a of agents) {
+    if (a.kind !== 'sub') continue;
+    for (const [id, role] of idRoles) {
+      const f = a.file || '';
+      if (f === id || f === `agent-${id}` || (id.length >= 6 && f.includes(id))) {
+        m.set(a, role);
+        break;
+      }
+    }
+  }
+  return m;
+}
+
 /** parseArgs refuses "--slug -x"; a slug always starts with "-", so join it as "--slug=-x". */
 export function joinDashValues(argv, names = ['slug']) {
   const out = [];
@@ -336,10 +591,15 @@ export function main(argv) {
       set: { type: 'string' },
       profile: { type: 'string' },
       json: { type: 'string' },
+      breaches: { type: 'boolean' },
+      'critical-path': { type: 'boolean' },
+      'task-list': { type: 'string' },
+      budget: { type: 'string' },
     },
     USAGE,
     argv,
   );
+  if (flags['critical-path'] && !flags['task-list']) die('--critical-path needs --task-list <path>');
   const projectDirRoot = flags.project ? abs(flags.project) : projectRoot();
   const projectsRoot = abs(flags['projects-root'] || join(homedir(), '.claude', 'projects'));
   let slug = flags.slug;
@@ -370,30 +630,55 @@ export function main(argv) {
   } catch (e) {
     die(e.message);
   }
-  const agents = collect({ projectDir, sessions, prices, roles, window: { since, until } });
+  const profilePath = flags.profile ? abs(flags.profile) : join(projectDirRoot, '.claude', 'workflow-profile.json');
+  let profile = null;
+  if (existsSync(profilePath))
+    try {
+      profile = readJson(profilePath, 'profile');
+    } catch {}
+  const budget = Number(flags.budget || profile?.limits?.context_budget_tokens || 200000);
+  if (!Number.isFinite(budget) || budget <= 0) die(`--budget: not a token count: ${flags.budget}`);
+  let tlText = null;
+  if (flags['task-list']) {
+    try {
+      tlText = readFileSync(abs(flags['task-list']), 'utf8');
+    } catch (e) {
+      die(`cannot read task list ${flags['task-list']}: ${e.code || e.message}`);
+    }
+  }
+  const agents = collect({ projectDir, sessions, prices, roles, window: { since, until }, budget });
   if (!agents.length)
     die(`no transcripts for ${sessions.join(', ')} in ${projectDir}${since !== null || until !== null ? ' inside the window' : ''}`, 1);
-  const md = renderMarkdown(agents, { slug, sessions, pricesPath: flags.prices, rolesPath: flags.roles, sinceRaw: flags.since, untilRaw: flags.until });
+  let md = renderMarkdown(agents, { slug, sessions, pricesPath: flags.prices, rolesPath: flags.roles, sinceRaw: flags.since, untilRaw: flags.until });
+  const tl = tlText ? readAgentsRows(tlText, dirname(abs(flags['task-list']))) : { roles: new Map(), worktrees: [] };
+  let extra = '';
+  if (flags.breaches) {
+    const rehearsals = Object.entries(profile?.gates || {})
+      .filter(([k, g]) => k !== 'notes' && g?.kind === 'rehearsal' && g.cmd)
+      .map(([, g]) => g.cmd);
+    const table = breachTable(findBreaches(agents, { worktrees: tl.worktrees, rehearsals, budget }));
+    extra += `\n${table}\n`;
+  }
+  if (flags['critical-path']) {
+    const cp = criticalPath(agents, rolesByAgent(agents, tl.roles), { start: since, end: until });
+    const main = agents.find((a) => a.kind === 'main');
+    const acceptance = acceptanceHours(frontmatter(tlText).fields);
+    extra += `\n${criticalPathText(cp, { avgCtx: main?.avgCtx || 0, budget, acceptance })}\n`;
+  }
+  md += extra;
 
   let out = flags.out && abs(flags.out);
-  if (!out && flags.set) {
-    const profilePath = flags.profile ? abs(flags.profile) : join(projectDirRoot, '.claude', 'workflow-profile.json');
-    let logsDir = 'logs';
-    if (existsSync(profilePath))
-      try {
-        logsDir = readJson(profilePath, 'profile').logs_dir || 'logs';
-      } catch {}
-    out = resolve(projectDirRoot, logsDir, `build-report-${flags.set}.md`);
-  }
+  if (!out && flags.set) out = resolve(projectDirRoot, profile?.logs_dir || 'logs', `build-report-${flags.set}.md`);
   if (out) {
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, `${md}\n`);
     process.stderr.write(`build-report: ${agents.length} agent(s) → ${out}\n`);
+    if (extra) process.stdout.write(`${extra.trim()}\n`);
   } else process.stdout.write(`${md}\n`);
   if (flags.json) {
     const j = abs(flags.json);
     mkdirSync(dirname(j), { recursive: true });
-    writeFileSync(j, `${JSON.stringify(agents, null, 2)}\n`);
+    writeFileSync(j, `${JSON.stringify(agents.map(({ commands, marks, ...a }) => a), null, 2)}\n`);
   }
   return 0;
 }

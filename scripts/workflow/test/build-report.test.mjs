@@ -158,3 +158,88 @@ test('build-report: --since/--until window the lines, so agents outside drop out
   assert.equal(run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', at(40)]).code, 1);
   assert.equal(run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--since', 'soon']).code, 2);
 });
+
+import { vitestWithoutPath, findBreaches, criticalPath, acceptanceHours } from '../build-report.mjs';
+import { taskList } from './tasklist-fixture.mjs';
+
+const bashAt = (min, id, req, tid, command, cwd) => ({ ...asst(min, id, req, u(1, 0, 0, 1), [tool(tid, 'Bash', { command })]), cwd });
+const resultAt = (min, tid) => ({ type: 'user', timestamp: at(min), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tid }] } });
+
+test('vitest without a test path', () => {
+  assert.equal(vitestWithoutPath('pnpm vitest run'), true);
+  assert.equal(vitestWithoutPath('npx vitest run --project api'), true);
+  assert.equal(vitestWithoutPath('cd x && pnpm vitest run --config vitest.config.ts'), true);
+  assert.equal(vitestWithoutPath('pnpm vitest run packages/a/src/x.test.ts'), false);
+  assert.equal(vitestWithoutPath('pnpm vitest related src/a.ts --run'), false);
+  assert.equal(vitestWithoutPath('node scripts/test-select.mjs --files a.ts --run'), false);
+});
+
+test('build-report --breaches counts each rule breach and prints a table', (t) => {
+  const f = fixture(t);
+  const dir = join(f.root, slugOf(f.project));
+  write(
+    join(dir, f.S, 'subagents', 'agent-lane1.jsonl'),
+    jsonl([
+      bashAt(10, 'l1', 'r1', 'b1', 'pnpm vitest run', '/w/my-app-wt/demo-a'),
+      bashAt(11, 'l2', 'r2', 'b2', 'pnpm vitest run src/a.test.ts', '/w/my-app-wt/demo-a'),
+      bashAt(12, 'l3', 'r3', 'b3', 'pnpm typecheck:clean', '/w/my-app-wt/demo-a'),
+      bashAt(13, 'l4', 'r4', 'b4', 'pnpm test:invariants --all', '/w/my-app-wt/demo-a'),
+      asst(14, 'l5', 'r5', u(10, 0, 250000, 1)),
+    ]),
+  );
+  write(join(dir, f.S, 'subagents', 'agent-lane1.meta.json'), { agentType: 'general-purpose', description: 'Lane A build' });
+  write(join(dir, f.S, 'subagents', 'agent-ver1.jsonl'), jsonl([bashAt(20, 'v1', 'q1', 'c1', 'pnpm test:invariants', '/w/my-app-wt/demo-a'), bashAt(21, 'v2', 'q2', 'c2', 'tsc --build --force', '/w/x')]));
+  write(join(dir, f.S, 'subagents', 'agent-ver1.meta.json'), { agentType: 'code-reviewer', description: 'Verify lane A' });
+  write(join(f.project, '.claude', 'workflow-profile.json'), {
+    version: 1,
+    project: 'my-app',
+    updated: '2026-11-25',
+    gates: { inv: { cmd: 'pnpm test:invariants', kind: 'rehearsal' } },
+    limits: { context_budget_tokens: 200000 },
+  });
+  const out = join(f.d, 'r.md');
+  const r = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--breaches', '--out', out]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /## Rule breaches/);
+  assert.match(r.out, /\| vitest with no test path inside a lane worktree \| 1 \| Lane A build \|/);
+  assert.match(r.out, /\| typecheck:clean or tsc --build --force run by a lane \| 1 \| Lane A build \|/, 'the verifier\'s tsc --force is not a lane breach');
+  assert.match(r.out, /\| rehearsal command run by a lane or verifier \| 2 \| Lane A build; Verify lane A \|/);
+  assert.match(r.out, /\| turn above the context budget \(200k\) \| 1 \| Lane A build \|/);
+  assert.match(r.out, /orchestrator average context above 1\.5 x budget .* \| 0 \|/);
+  assert.match(readFileSync(out, 'utf8'), /## Rule breaches/, 'also in the report');
+  const low = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--breaches', '--budget', '1000']);
+  assert.match(low.out, /orchestrator average context above 1\.5 x budget .* \| 1 \|/);
+});
+
+test('critical path: building, checking (a verifier\'s fix work counts as building), documents, waiting', () => {
+  const mk = (kind, description, marks) => ({ kind, description, role: '', marks: marks.map(([m, x = {}]) => ({ t: T0 + m * 60000, ...x })) });
+  const lane = mk('sub', 'Lane A build', [[0], [5], [10]]); // 0–10 building
+  const ver = mk('sub', 'Verify lane A', [[10], [14], [15, { edit: true }], [18], [20, { commit: true }], [24]]); // 10–15 check, 15–20 fix, 20–24 check
+  const doc = mk('sub', 'Design area wireframes', [[2], [8]]); // overlaps building: counts nothing extra
+  const main = mk('main', 'main', [[24], [28, { check: true }], [40]]); // 24–28 checking; 28–40 a 12-min gap: waiting
+  const cp = criticalPath([lane, ver, doc, main]);
+  const min = (k) => cp[k] / 60000;
+  assert.equal(min('building'), 15);
+  assert.equal(min('checking'), 13);
+  assert.equal(min('documents'), 0);
+  assert.equal(min('waiting'), 12);
+  assert.equal(min('elapsed'), 40);
+  const roles = new Map([[doc, 'lane']]);
+  assert.equal(criticalPath([doc], roles).building / 60000, 6, 'the task list role wins over the description');
+  assert.equal(acceptanceHours({ started: '2026-11-20', accepted_on_beta: '2026-11-22T12:00' }), 60);
+  assert.equal(acceptanceHours({ started: '2026-11-20' }), null);
+});
+
+test('build-report --critical-path reads the task list and reports the parts, the orchestrator context and acceptance', (t) => {
+  const f = fixture(t);
+  let tl = taskList([{ lane: 'A', id: 'agent-a', worktree: '/w/my-app-wt/demo-a' }]).replace(/^started: .*$/m, 'started: 2026-01-01').replace(/^status: .*$/m, 'status: completed\naccepted_on_beta: 2026-01-02');
+  const tlp = write(join(f.d, 'tl.md'), tl);
+  const r = run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--critical-path', '--task-list', tlp, '--out', join(f.d, 'o.md')]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /## Critical path/);
+  assert.match(r.out, /\| Building \| 2 \|/, 'agent-a is a lane by its task-list role');
+  assert.match(r.out, /\| \*\*Elapsed\*\* \| 33 \| 100% \|/);
+  assert.match(r.out, /Orchestrator average context: 2k \(budget 200k; restart above 300k\)/);
+  assert.match(r.out, /Time to owner acceptance: 24 h/);
+  assert.equal(run('build-report.mjs', ['--session', f.S, '--project', f.project, '--projects-root', f.root, '--critical-path']).code, 2);
+});
