@@ -20,14 +20,19 @@ Reads the Agents table of the task list (templates/batch-progress.md format) eve
   - the mtime of <worktree>/.lane/progress.md (and any other file in .lane/),
   - the newest file under <worktree>/<logs_dir> (profile logs_dir, default "logs"),
   - the Launched time, or the worktree's creation, for a lane with no work yet.
-A lane that holds a heavy-job slot (a live pid in <lock-dir>/slot-<i> whose cwd is inside the
-worktree, or whose holder names the lane) is active, however old its other signals.
+A lane that holds a heavy-job slot (a live pid in <lock-dir>/slot-<i>/pid or <lock-dir>/<i>/pid
+whose cwd is inside the worktree, or whose holder names the lane) is active, however old its other
+signals.
+
+The task list's front-matter "status:" comes first: anything but in_progress (completed, dry_run,
+failed, …) means the batch is not running, and the watchdog exits 0 with "batch not running"
+without reading the Agents table. A task list without a status line is read as in_progress.
 
 Stall threshold: --stall-minutes, else the task list's stall_minutes, else the profile's
 limits.stall_minutes, else 45. Slot lock dirs: --lock-dir, plus every heavy_jobs.*.lock_dir of
 the profile (default ${'${TMPDIR:-/tmp}'}/workflow-slots/<job>).
 
-Exit: 0 no lane is running · 3 a lane stalled (report on stdout) · 2 usage.
+Exit: 0 no lane is running, or the batch is not running · 3 a lane stalled (report on stdout) · 2 usage.
 With --once it checks a single time and exits 4 when lanes are running and none is stalled.`;
 
 const mtime = (p) => {
@@ -82,7 +87,8 @@ function slotHolders(lockDirs) {
       continue;
     }
     for (const name of entries) {
-      if (!/^slot-\d+$/.test(name)) continue;
+      // slot.sh writes slot-<i>/; older scripts sharing a lock dir use a bare <i>/.
+      if (!/^(slot-)?\d+$/.test(name)) continue;
       const d = join(dir, name);
       const read = (f) => {
         try {
@@ -108,6 +114,9 @@ function parseLaunched(s) {
 export function check({ taskList, stallMinutes, profilePath, lockDirs = [] }) {
   const text = readFileSync(taskList, 'utf8');
   const fm = frontmatter(text).fields;
+  const status = stripCode(fm.status || '').toLowerCase();
+  if (status && status !== 'in_progress')
+    return { at: nowStamp(), batchStatus: status, notRunning: true, stallMinutes: null, running: 0, stalled: 0, lanes: [] };
   const profile = profilePath && existsSync(profilePath) ? loadProfile(profilePath) : null;
   const stall = Number(stallMinutes || fm.stall_minutes || profile?.limits?.stall_minutes || 45);
   const logsDir = profile?.logs_dir || 'logs';
@@ -176,6 +185,7 @@ export function check({ taskList, stallMinutes, profilePath, lockDirs = [] }) {
 const ago = (ms, now) => (ms ? `${Math.round((now - ms) / 60000)}m` : '—');
 
 export function report(r) {
+  if (r.notRunning) return `watchdog ${r.at} · batch not running (status: ${r.batchStatus})`;
   const now = Date.now();
   const lines = [`watchdog ${r.at} · stall ${r.stallMinutes} min · ${r.running} running · ${r.stalled} stalled`];
   for (const l of r.lanes) {

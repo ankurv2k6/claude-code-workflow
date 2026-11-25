@@ -13,30 +13,53 @@ Usage:
   node scaffold.mjs --lane-map <map.json> [--profile <path>] [--repo <dir>] [--apply]
                     [--briefs-dir <dir>]… [--smoke-commands <k1,k2>] [--skip-db] [--skip-smoke] [--json]
 
-Lane map (JSON):
+Lane map (JSON, context/batch-briefs/<set>/lane-map.json):
   { "set": "x", "base": "<ref the lanes branch from>", "worktree_root": "../my-app-wt",
-    "lanes": [ { "lane": "A", "branch": "lane/x-a", "worktree": "<optional path>",
+    "lanes": [ { "lane": "A", "modules": ["M1"], "tasks": ["T1", "T2"], "waits_on": ["C0"],
+                 "merge_order": 2, "branch": "feat/x-a", "worktree": "<optional path>",
                  "ports": ["api", "web"], "test_db": true, "brief": "<optional path>",
                  "base": "<optional per-lane ref>" } ] }
+  lane        the lane id: a module id (M12, M12a) or a lane or cross-cutting id (C0, C0-UI, PERF)
+  modules     the modules the lane builds
+  tasks       optional: the subset of those modules' tasks this lane builds (a split module); absent
+              means every task
+  waits_on    lanes that must have merged (or whose stubs C0 provides) before this one launches; []
+              means it may start beside C0 when it consumes no contract under review
+  merge_order 1, 2, … the order the orchestrator merges in
+  ports       port names to allocate; absent: profile ports.names (default ["api"]); [] for none
+  The scaffold reads lane, branch, worktree, base, ports, test_db and brief; it ignores modules,
+  tasks, waits_on and merge_order, which /implement-batch reads (the task list records them).
   Defaults: branch lane/<set>-<lane>; worktree <worktree_root>/<set>-<lane>; worktree_root
   ../<repo name>-wt; test_db true when the profile has test_db.create.
 
 Steps, in order:
-  1. ports    allocate each lane's named ports from profile ports.range (default 4400–4999) via
-              the registry (profile ports.registry, default .claude/ports.json). A missing
-              registry is seeded by scanning brief files (context/batch-briefs/ and --briefs-dir)
-              for port numbers in range, so ports already handed out are not reused.
+  1. ports    allocate each lane's named ports via the registry (profile ports.registry, default
+              .claude/ports.json). Never handed out: the registry's "allocations" (port -> holder),
+              "taken" (a list of numbers, or of records holding them) and "fixed" (name -> number).
+              Without ports.step or ports.offsets each name takes the next free port of ports.range
+              (default 4400–4999). With either, a lane takes a free base port at range start +
+              k * step and each name sits at base + ports.offsets.<name> (a name without an offset
+              takes the next free one of 0, 1, 2…), e.g. step 10, offsets {"web": 2000}: api 4400,
+              web 6400; the next lane api 4410, web 6410. {port} is the first name's port.
+              A missing registry is seeded by scanning brief files (context/batch-briefs/ and
+              --briefs-dir) for port numbers in range, so ports already handed out are not reused.
               Re-running reuses a lane's existing ports.
   2. worktree git worktree add -b <branch> <path> <base> (or onto an existing branch); an existing
               worktree on the same branch is kept. .lane/ is added to info/exclude.
   3. test DB  profile test_db.create with {name} {url} {port}, then test_db.bootstrap; the name
-              comes from test_db.name_pattern ({set}, {lane}); test_db.host must be in allow_hosts.
+              comes from test_db.name_pattern ({set}, {lane}), {url} from test_db.url (default
+              postgresql://{host}:{port}/{name}); test_db.host must be in allow_hosts.
   4. health   every gate of kind "health", once, in the repo root.
-  5. smoke    every "smoke": true gate in the first lane's worktree with that lane's
-              placeholders; every commands.* entry is rendered with the lane's values and an
-              unfilled placeholder other than {files} is a failure; --smoke-commands runs the
-              named commands too.
-Without --apply nothing is created, written or run: each step prints what it would do.
+  5. smoke    in the first lane's worktree, with that lane's placeholders: commands.install, then
+              commands.build (each when defined; always in a worktree this run creates, else only
+              when --smoke-commands names it), then every "smoke": true gate, then the other
+              commands --smoke-commands names (e.g. typecheck,test_lane_end: the test DBs exist by
+              now). A failed install or build skips the rest of the smoke run. Every commands.*
+              entry is rendered with the lane's values; an unfilled placeholder other than {files}
+              is a failure. A staged-file gate passes on an empty index: it proves the hook runs,
+              not that its tools work.
+Without --apply nothing is created, written, run or committed: each step prints what it would do.
+--apply creates worktrees, branches, the registry and test DBs, and runs commands; it commits nothing.
 
 Exit: 0 ok · 1 a step failed · 2 usage.`;
 
@@ -74,27 +97,90 @@ export function scanBriefPorts(dirs, [lo, hi], repo) {
   return found;
 }
 
-export function allocatePorts(registry, lanes, set, [lo, hi]) {
+/** Port numbers a registry reserves outside allocations: "taken" and "fixed", in any nesting. */
+export function reservedPorts(registry) {
+  const out = new Set();
+  const visit = (v) => {
+    if (typeof v === 'string' && /^\d{1,5}$/.test(v)) v = Number(v);
+    if (Number.isInteger(v)) {
+      if (v > 0 && v < 65536) out.add(v);
+    } else if (Array.isArray(v)) v.forEach(visit);
+    else if (v && typeof v === 'object') Object.values(v).forEach(visit);
+  };
+  visit(registry?.taken);
+  visit(registry?.fixed);
+  return out;
+}
+
+/** Offset of each name from the lane's base port: ports.offsets, else the next free 0, 1, 2… */
+export function laneOffsets(names, offsets = {}) {
+  const out = {};
+  const used = new Set();
+  for (const n of names) if (Number.isInteger(offsets[n])) used.add((out[n] = offsets[n]));
+  let next = 0;
+  for (const n of names) {
+    if (n in out) continue;
+    while (used.has(next)) next++;
+    used.add((out[n] = next));
+  }
+  return out;
+}
+
+/**
+ * Allocate each lane's named ports. Ports in registry allocations, "taken" and "fixed" are never
+ * handed out. Without step or offsets each name takes the next free port of the range; with either,
+ * a lane takes a base port (range start + k * step) and each name sits at base + its offset.
+ */
+export function allocatePorts(registry, lanes, set, [lo, hi], { step = 1, offsets = {} } = {}) {
   const alloc = registry.allocations;
-  const taken = new Set(Object.keys(alloc).map(Number));
+  const taken = new Set([...Object.keys(alloc).map(Number), ...reservedPorts(registry)]);
+  const block = step > 1 || Object.keys(offsets).some((k) => k !== 'notes');
   const result = {};
   const added = [];
+  const take = (l, name, p) => {
+    taken.add(p);
+    alloc[p] = { set, lane: l.lane, name, date: today() };
+    added.push(p);
+    result[l.lane][name] = p;
+  };
+  const hitOf = (l, name) => Object.entries(alloc).find(([, a]) => a.set === set && a.lane === l.lane && a.name === name);
   for (const l of lanes) {
     result[l.lane] = {};
-    for (const name of l.ports || []) {
-      const hit = Object.entries(alloc).find(([, a]) => a.set === set && a.lane === l.lane && a.name === name);
-      if (hit) {
-        result[l.lane][name] = Number(hit[0]);
-        continue;
+    const names = l.ports || [];
+    if (!block) {
+      for (const name of names) {
+        const hit = hitOf(l, name);
+        if (hit) {
+          result[l.lane][name] = Number(hit[0]);
+          continue;
+        }
+        let p = lo;
+        while (p <= hi && taken.has(p)) p++;
+        if (p > hi) throw new Error(`no free port left in ${lo}–${hi}`);
+        take(l, name, p);
       }
-      let p = lo;
-      while (p <= hi && taken.has(p)) p++;
-      if (p > hi) throw new Error(`no free port left in ${lo}–${hi}`);
-      taken.add(p);
-      alloc[p] = { set, lane: l.lane, name, date: today() };
-      added.push(p);
-      result[l.lane][name] = p;
+      continue;
     }
+    const off = laneOffsets(names, offsets);
+    const hits = names.map((n) => [n, hitOf(l, n)]).filter(([, h]) => h);
+    for (const [n, h] of hits) result[l.lane][n] = Number(h[0]);
+    const missing = names.filter((n) => !(n in result[l.lane]));
+    if (!missing.length) continue;
+    let base;
+    if (hits.length) {
+      base = Number(hits[0][1][0]) - off[hits[0][0]];
+      for (const n of missing)
+        if (taken.has(base + off[n])) throw new Error(`lane ${l.lane}: port ${base + off[n]} for "${n}" (base ${base} + ${off[n]}) is taken`);
+    } else {
+      const fits = (b) => missing.every((n) => b + off[n] < 65536 && !taken.has(b + off[n]));
+      for (let b = lo; b <= hi; b += step)
+        if (fits(b)) {
+          base = b;
+          break;
+        }
+      if (base === undefined) throw new Error(`no free base port left in ${lo}–${hi} (step ${step}) for lane ${l.lane}`);
+    }
+    for (const n of missing) take(l, n, base + off[n]);
   }
   return { ports: result, added };
 }
@@ -114,7 +200,7 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
       branch: l.branch || `lane/${slug(set)}-${slug(l.lane)}`,
       worktree: l.worktree ? resolve(repo, l.worktree) : join(root, `${slug(set)}-${slug(l.lane)}`),
       base,
-      ports: l.ports || [],
+      ports: l.ports || profile?.ports?.names || ['api'],
       brief: l.brief,
     };
     const wantDb = l.test_db ?? !!db?.create;
@@ -137,7 +223,7 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
     registry = { version: 1, range, allocations: { ...seeded } };
   }
   registry.allocations ||= {};
-  const { ports, added } = allocatePorts(registry, lanes, set, range);
+  const { ports, added } = allocatePorts(registry, lanes, set, range, { step: profile?.ports?.step || 1, offsets: profile?.ports?.offsets || {} });
   for (const l of lanes) l.portMap = ports[l.lane];
 
   const steps = [];
@@ -160,6 +246,7 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
     }
     const argv = hasBranch ? ['worktree', 'add', l.worktree, l.branch] : ['worktree', 'add', '-b', l.branch, l.worktree, l.base];
     steps.push({ step: 'worktree', lane: l.lane, what: `git ${argv.join(' ')}`, git: argv, worktree: l.worktree });
+    l.fresh = true;
   }
 
   // 3. test DBs
@@ -178,24 +265,30 @@ export function plan({ map, profile, repo, briefsDirs = [], skipDb, skipSmoke, s
   for (const [name, g] of Object.entries(profile?.gates || {}))
     if (g?.kind === 'health') steps.push({ step: 'health', what: `${name}: ${g.cmd}`, run: g.cmd, cwd: repo });
 
-  // 5. smoke
+  // 5. smoke: in a fresh worktree, install and build come first, so the gates see a built tree
   if (!skipSmoke && profile) {
     const l = lanes[0];
     const v = { lane: laneToken(l.lane), set: laneToken(set), base: l.base, port: Object.values(l.portMap)[0], name: l.db?.name, url: l.db?.url };
+    const cmds = Object.entries(profile.commands || {}).filter(([k, c]) => k !== 'notes' && typeof c === 'string');
+    const smokeCmd = (k, c, prep) => {
+      const f = fill(c, v);
+      const missing = f.missing.filter((m) => m !== 'files');
+      if (missing.length) steps.push({ step: 'smoke', what: `commands.${k}: unfilled {${missing.join('}, {')}}`, error: true });
+      else if (prep || smokeCommands.includes(k)) steps.push({ step: 'smoke', what: `commands.${k}: ${f.cmd}`, run: f.cmd, cwd: l.worktree, prep: !!prep, after: !prep });
+      else steps.push({ step: 'smoke', what: `commands.${k}: renders`, skip: true });
+    };
+    const PREP = ['install', 'build'];
+    for (const k of PREP) {
+      const c = profile.commands?.[k];
+      if (typeof c === 'string') smokeCmd(k, c, l.fresh || smokeCommands.includes(k));
+    }
     for (const [name, g] of Object.entries(profile.gates || {})) {
       if (g?.smoke !== true) continue;
       const f = fill(g.cmd, v);
       if (f.missing.length) steps.push({ step: 'smoke', what: `gates.${name}: unfilled {${f.missing.join('}, {')}}`, error: true });
-      else steps.push({ step: 'smoke', what: `gates.${name}: ${f.cmd}`, run: f.cmd, cwd: l.worktree });
+      else steps.push({ step: 'smoke', what: `gates.${name}: ${f.cmd}`, run: f.cmd, cwd: l.worktree, after: true });
     }
-    for (const [k, c] of Object.entries(profile.commands || {})) {
-      if (k === 'notes') continue;
-      const f = fill(c, v);
-      const missing = f.missing.filter((m) => m !== 'files');
-      if (missing.length) steps.push({ step: 'smoke', what: `commands.${k}: unfilled {${missing.join('}, {')}}`, error: true });
-      else if (smokeCommands.includes(k)) steps.push({ step: 'smoke', what: `commands.${k}: ${f.cmd}`, run: f.cmd, cwd: l.worktree });
-      else steps.push({ step: 'smoke', what: `commands.${k}: renders`, skip: true });
-    }
+    for (const [k, c] of cmds) if (!PREP.includes(k)) smokeCmd(k, c, false);
   }
   return { set, repo, lanes, steps };
 }
@@ -212,10 +305,17 @@ function excludeLane(worktree) {
 
 export function execute(p, profile) {
   let failed = false;
+  let prepFailed = '';
   for (const s of p.steps) {
     if (s.error || s.skip) {
       s.status = s.error ? 'fail' : 'skip';
       failed ||= !!s.error;
+      continue;
+    }
+    if (s.after && prepFailed) {
+      // A gate cannot pass on a tree whose install or build failed; that failure is the one to fix.
+      s.status = 'skip';
+      s.detail = `not run: ${prepFailed} failed`;
       continue;
     }
     if (s.write) {
@@ -243,6 +343,7 @@ export function execute(p, profile) {
         if (r.code) s.detail = (r.stderr || r.stdout).trim().split('\n').slice(-3).join(' | ');
       }
     } else s.status = 'done';
+    if (s.prep && s.status === 'fail') prepFailed ||= s.what.split(':')[0];
     failed ||= s.status === 'fail';
   }
   return failed;

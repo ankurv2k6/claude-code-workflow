@@ -49,9 +49,18 @@
     "name_pattern": "app_{set}_{lane}_test",
     "create": "docker exec my-app-testdb createdb -U postgres {name}",
     "bootstrap": "TEST_DATABASE_URL={url} pnpm test:bootstrap",
-    "allow_hosts": ["127.0.0.1", "localhost"]
+    "url": "postgresql://postgres:postgres@{host}:{port}/{name}",
+    "allow_hosts": ["127.0.0.1", "localhost"],
+    "notes": "url carries the local test container's throwaway credentials; never a shared or production database's."
   },
-  "ports": { "range": [4400, 4999], "registry": ".claude/ports.json" },
+  "ports": {
+    "range": [4400, 4999],
+    "registry": ".claude/ports.json",
+    "names": ["api", "web"],
+    "step": 10,
+    "offsets": { "web": 2000 },
+    "notes": "A lane gets api at a base port (4400, 4410, …) and web at base + 2000."
+  },
   "known_reds": "context/testing/known-reds.md",
   "logs_dir": "logs",
   "agents": { "max_concurrent": 6, "verifier_model": "opus", "overrides": { "doc-writer": "sonnet" } },

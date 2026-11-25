@@ -96,3 +96,27 @@ test('watchdog: a running row whose worktree is gone is reported stalled', (t) =
   assert.equal(r.code, 3);
   assert.match(r.out, /worktree missing/);
 });
+
+test('watchdog: a task list whose status is not in_progress exits 0 with "batch not running"', (t) => {
+  const f = fixture(t);
+  for (const status of ['completed', 'dry_run']) {
+    const tl = write(join(f.d, 'context', `${status}.md`), taskList(f.rows).replace(/^status: in_progress$/m, `status: ${status}`));
+    const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--once']);
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.match(r.out, new RegExp(`batch not running \\(status: ${status}\\)`));
+  }
+  const noStatus = write(join(f.d, 'context', 'nostatus.md'), taskList(f.rows).replace(/^status: in_progress\n/m, ''));
+  assert.equal(run('watchdog.mjs', ['--task-list', noStatus, '--profile', f.profile, '--once']).code, 3, 'no status line: read as running');
+});
+
+test('watchdog: a slot holder in <lock_dir>/<n>/pid (no slot- prefix) counts as active', (t) => {
+  const f = fixture(t);
+  const lock = join(f.d, 'locks', 'flows');
+  mkdirSync(join(lock, '2'), { recursive: true });
+  writeFileSync(join(lock, '2', 'pid'), `${process.pid}\n`);
+  writeFileSync(join(lock, '2', 'cwd'), `${f.wtA}\n`);
+  const tl = write(join(f.d, 'context', 'batch-progress.md'), taskList(f.rows.filter((r) => r.lane === 'A')));
+  const r = run('watchdog.mjs', ['--task-list', tl, '--profile', f.profile, '--lock-dir', lock, '--once', '--json']);
+  assert.equal(r.code, 4, r.out + r.err);
+  assert.match(JSON.parse(r.out).lanes[0].reason, /holds slot flows\/2/);
+});

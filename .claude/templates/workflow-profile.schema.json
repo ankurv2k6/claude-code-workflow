@@ -109,6 +109,11 @@
         "name_pattern": { "type": "string", "description": "Placeholders {set}, {lane}." },
         "create": { "type": "string", "description": "Placeholder {name}." },
         "bootstrap": { "type": "string", "description": "Placeholder {url}." },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Template of the {url} placeholder. Placeholders {host}, {port}, {name}; {host} and {name} are required. Default postgresql://{host}:{port}/{name}. A user and password may be written in it only for a local test database."
+        },
         "allow_hosts": { "type": "array", "items": { "type": "string" } },
         "notes": { "type": "string" }
       }
@@ -119,6 +124,18 @@
       "properties": {
         "range": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1 } },
         "registry": { "type": "string" },
+        "names": {
+          "type": "array",
+          "description": "Port names a lane gets when its lane-map entry has no \"ports\". Default [\"api\"].",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" }
+        },
+        "step": { "type": "integer", "minimum": 1, "description": "Distance between two lanes' base ports. Default 1." },
+        "offsets": {
+          "type": "object",
+          "description": "Port name -> offset from the lane's base port, e.g. {\"web\": 2000}. A name without one takes the next free offset 0, 1, 2…",
+          "properties": { "notes": { "type": "string" } },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
         "notes": { "type": "string" }
       }
     },
