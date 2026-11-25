@@ -5,11 +5,15 @@
  *   node scripts/check-skills.mjs
  *
  * Fails (exit 1) when:
- *   - a `_shared-*.md` or `~/.claude/templates/...` reference does not resolve;
- *   - a retired phrase survives in a command (rules the 2026-10-27 revision replaced);
+ *   - a `_shared-*.md`, `~/.claude/templates/...` or `$WH/.claude/templates/...` reference does not resolve;
+ *   - a retired phrase survives in a command or a Markdown template (rules a revision replaced);
  *   - a file carries a stray tool-call closing tag (`</content>`, `</invoke>`, `</parameter>`);
  *   - a shared protocol lacks frontmatter with a description and `disable-model-invocation: true`;
- *   - a workflow command that launches agents does not cite the effort budget.
+ *   - a workflow command that launches agents does not cite the effort budget;
+ *   - a command or shared file names a profile key (`commands.test_task`, `tiers.merge`, `limits.*`, …)
+ *     that the profile schema does not define.
+ *
+ * A retired phrase is allowed in a sentence that forbids it ("never in `.lane/report.md`").
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
@@ -19,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const COMMANDS = join(ROOT, '.claude/commands');
 const TEMPLATES = join(ROOT, '.claude/templates');
+const SCHEMA = join(TEMPLATES, 'workflow-profile.schema.json');
 
 const walk = (dir) =>
   readdirSync(dir).flatMap((name) => {
@@ -34,7 +39,7 @@ const templateFiles = existsSync(TEMPLATES) ? walk(TEMPLATES) : [];
 /** Commands the 2026-10-27 revision governs. Others predate it and are not held to its rules. */
 const WORKFLOW = [
   'plan', 'analyze-plan', 'blueprint', 'design-ui', 'implement-plan', 'implement-batch',
-  'verify-implementation', 'verify-ui', 'commit', 'e2e-validate',
+  'verify-implementation', 'verify-ui', 'commit', 'e2e-validate', 'workflow-sync',
 ];
 
 const RETIRED = [
@@ -49,7 +54,42 @@ const RETIRED = [
   ['frontend-engineer', 'not an installed agent type'],
   ['/^M(1[0-3]|[1-9])$/', 'module ids are /^M\\d{1,3}[a-z]?$/'],
   ['--passWithNoTests', 'turns an empty selection into a false green'],
+  ['1,000+ tool calls', 'size lanes by the context budget (_shared-effort-budget.md)'],
+  ['`.lane/report.md`', 'the lane report goes in the final reply under fixed headings'],
+  ['Lanes of 3–6 hours', 'size lanes by the context budget, not by hours'],
 ];
+
+/** A sentence that forbids the phrase is not a use of it. */
+const NEGATION = /\b(never|no|not|without)\b/i;
+const retiredUses = (text, phrase) =>
+  text.split('\n').filter((line) => {
+    for (let i = line.indexOf(phrase); i !== -1; i = line.indexOf(phrase, i + 1)) {
+      const before = line.slice(0, i);
+      if (!NEGATION.test(before.split(/[.!?][*_`)\]]*\s+/).pop())) return true;
+    }
+    return false;
+  }).length;
+
+/** Profile keys a command may name, checked against the schema. */
+const PROFILE_ROOTS = [
+  'commands', 'tiers', 'gates', 'risk_routing', 'heavy_jobs', 'test_db', 'limits', 'agents', 'ports',
+  'known_reds', 'logs_dir', 'invariant_suites',
+];
+const PROFILE_KEY = new RegExp(`^\\.?(${PROFILE_ROOTS.join('|')})((?:\\.[\\w*-]+)*)$`);
+const schema = existsSync(SCHEMA) ? JSON.parse(readFileSync(SCHEMA, 'utf8')) : null;
+
+/** Walk a dotted path through the schema; `*` matches any defined key. */
+const inSchema = (path) => {
+  let node = schema;
+  for (const seg of path) {
+    if (node?.type === 'array') node = node.items;
+    if (!node || node.type !== 'object') return false;
+    if (seg === '*') return Boolean(node.properties || node.additionalProperties);
+    node = node.properties?.[seg] ?? (typeof node.additionalProperties === 'object' ? node.additionalProperties : null);
+    if (!node) return false;
+  }
+  return true;
+};
 
 const STRAY_TAGS = ['</content>', '</invoke>', '</parameter>'];
 
@@ -67,17 +107,29 @@ for (const file of [...commandFiles, ...templateFiles]) {
   for (const m of text.matchAll(/_shared-[a-z-]+\.md/g)) {
     if (!existsSync(join(COMMANDS, m[0]))) problems.push(`${rel(file)}: reference to missing ${m[0]}`);
   }
-  for (const m of text.matchAll(/~\/\.claude\/templates\/([\w./-]+[\w-])/g)) {
+  for (const m of text.matchAll(/(?:~|\$WH)\/\.claude\/templates\/([\w./-]+[\w-])/g)) {
     if (!existsSync(join(TEMPLATES, m[1]))) problems.push(`${rel(file)}: reference to missing template ${m[1]}`);
   }
 
-  if (!file.startsWith(COMMANDS)) continue;
+  for (const m of file.endsWith('.md') ? text.matchAll(/`([^`\n]+)`/g) : []) {
+    const key = m[1].match(PROFILE_KEY);
+    if (!key) continue;
+    if (!schema) {
+      problems.push(`${rel(file)}: names profile key \`${m[1]}\` but ${rel(SCHEMA)} is missing`);
+      break;
+    }
+    const path = [key[1], ...key[2].split('.').filter(Boolean)];
+    if (!inSchema(path)) problems.push(`${rel(file)}: profile key \`${m[1]}\` is not in the schema`);
+  }
 
-  if (WORKFLOW.includes(name) || name.startsWith('_shared-')) {
+  const governed = file.startsWith(COMMANDS) ? WORKFLOW.includes(name) || name.startsWith('_shared-') : file.endsWith('.md');
+  if (governed) {
     for (const [phrase, why] of RETIRED) {
-      if (text.includes(phrase)) problems.push(`${rel(file)}: retired phrase "${phrase}" (${why})`);
+      if (retiredUses(text, phrase)) problems.push(`${rel(file)}: retired phrase "${phrase}" (${why})`);
     }
   }
+
+  if (!file.startsWith(COMMANDS)) continue;
 
   if (name.startsWith('_shared-')) {
     const fm = text.match(/^---\n([\s\S]*?)\n---/);

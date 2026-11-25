@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "description": "Lets `node --test scripts/workflow/test/` run on Node 22+, where a directory argument is resolved as a module: index.mjs imports every *.test.mjs. Node 18/20 expand the directory themselves."
+}

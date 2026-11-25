@@ -1,5 +1,5 @@
 ---
-description: Implement a plan or module blueprint phase by phase, updating the plan file as it goes, with targeted tests, real-browser UI parity and a capped verification (CRITICAL and HIGH block, at most 2 sweeps). Use --lane inside /implement-batch.
+description: Implement a plan or module blueprint phase by phase, updating the plan file as it goes, with the project profile's tests per task, commit and lane end, real-browser UI parity and a capped verification (CRITICAL and HIGH block, at most 2 sweeps). Use --lane inside /implement-batch.
 ---
 
 # Implement Plan
@@ -10,7 +10,7 @@ and the three-layer blueprint system. Two modes:
 | Mode | Used by | Verification | Writes shared state |
 |---|---|---|---|
 | **standalone** (default) | a person running one plan or module | sweep 1 via `/verify-implementation`, sweep 2 re-checks the fixes | plan, status file, registry, memory |
-| **`--lane`** | an `/implement-batch` lane agent | self-review against `_shared-triage.md`, at most 2 sweeps; an independent verifier follows | plan file, module Deviations, `.lane/progress.md` only; the orchestrator writes the rest |
+| **`--lane`** | an `/implement-batch` lane agent | self-review against `_shared-triage.md`, at most 2 sweeps; an independent verifier follows | plan file, module Deviations, `.lane/progress.md` only; the orchestrator writes the rest from your hand-back |
 
 This file is written to be followed by reading it. A lane agent without the Skill tool reads it and
 follows it.
@@ -25,9 +25,14 @@ Execute automatically without permission.
 
 ## Shared protocols (`~/.claude/commands/`)
 
-`_shared-autonomous.md` (standing rules, guardrails) · `_shared-test-selection.md` ·
-`_shared-ui-parity.md` · `_shared-triage.md` · `_shared-commit-protocol.md` ·
-`_shared-agent-tracking.md` (lane notes).
+`_shared-autonomous.md` (standing rules, guardrails) · `_shared-project-profile.md` (the profile) ·
+`_shared-test-selection.md` · `_shared-ui-parity.md` · `_shared-triage.md` · `_shared-commit-protocol.md` ·
+`_shared-agent-tracking.md` (the progress note) · `_shared-effort-budget.md` (context budget, hand-back).
+
+**The profile.** If `.claude/workflow-profile.json` exists, read it per `_shared-project-profile.md`: the
+commands and tiers below come from it, run with its `shell_prefix`. **No profile (v1):** follow the v1 text
+marked below; everything else applies as written. In `--lane` mode the brief and `_common.md` already list the
+filled commands: run exactly those.
 
 ---
 
@@ -49,9 +54,11 @@ For each screen the plan or blueprint §4A names, record:
 If `blprnt-*.md`:
 - load the §0 Context Manifest and the impl spec `context/implementation/impl-[M-ID]-[name].md`;
 - load the relevant `impl-contracts` sections (LOCKED sections must not drift without a DEV entry);
-- run the §12 pre-flight checks, and STOP if any fail.
+- run the §12 pre-flight checks (dependency status, interface imports, LOCKED contracts unchanged, build
+  chain), and STOP if any fail.
 
-Load per task, not the whole manifest at once (`_shared-effort-budget.md`).
+Load per task, by anchor, not the whole manifest at once; batch independent reads in one turn
+(`_shared-effort-budget.md`).
 
 ### 5. Initialize TodoWrite
 One item per phase or task, plus `VERIFY (≤ 2 sweeps)` and `CONTEXT-SYNC`.
@@ -63,8 +70,9 @@ One item per phase or task, plus `VERIFY (≤ 2 sweeps)` and `CONTEXT-SYNC`.
 | Phase | Status | Commits |
 ```
 
-**State lives on disk.** Write progress to the plan file (and in `--lane` mode to `.lane/progress.md`)
-at every step. If your context is summarized, re-read them and continue.
+**State lives on disk.** Write progress to the plan file (and in `--lane` mode to `.lane/progress.md`, in
+the progress-note format of `_shared-agent-tracking.md`) at every step. If your context is summarized,
+re-read them and continue.
 
 ---
 
@@ -81,16 +89,21 @@ Mark it `🔄 In Progress` in the plan and TodoWrite.
 **UI tasks:**
 1. Read the wireframe (its Information decisions table governs) and the mockup with every state.
 2. Build with the project's shared components and theme tokens, never colour literals. Add nothing the
-   wireframe omits.
-3. Prove parity per `_shared-ui-parity.md`: screenshot pairs of mockup and app in each key state. Fix
-   structure, copy and state differences. A UI task is not done without its pairs.
+   wireframe omits. Make every mockup state reachable.
+3. Parity is proven once, by the UI verifier on the real stack (`_shared-ui-parity.md`): in `--lane` mode
+   your verifier, standalone sweep 1. Look at your screens while building if it helps; fakes are for
+   building, never for proof.
 
 ### Step 3: Mark items complete
 `- [x] Item ✅ (commit: [SHA])`, with evidence for significant items (files, exports, tests).
 
 ### Step 4: Lightweight verification
-- Tests: `_shared-test-selection.md`, "After an edit": the selection for the files you changed, once.
-- Typecheck, lint and build of the touched packages.
+- Tests: `commands.test_task` with every file the task changed, in **one** call. No profile (v1):
+  `_shared-test-selection.md`, "After an edit", once.
+- Typecheck of the touched packages (`commands.typecheck`, incremental) and their build.
+- A command longer than a minute writes to `logs_dir` (`_shared-test-selection.md`). Never end your turn
+  while your own background job runs: wait for its notification, or stop it.
+- A red listed in the known-reds file is reported by name, not diagnosed.
 - Fix failures now, at most 3 attempts; then note them as known issues.
 
 ### Step 4b: Stub quick-check
@@ -102,12 +115,18 @@ grep -rn "TODO\|FIXME\|STUB\|NotImplemented\|placeholder.*implemented\|export {}
 - Structural stubs: fix if the upstream module is complete or merged; otherwise note them as expected.
 
 ### Step 5: Commit
-One commit per task, through the project's gates (`_shared-commit-protocol.md`). Put the task id in the
+One commit per task. Gates: `tiers.per_commit`, unless the project's pre-commit hook runs them (then run
+nothing by hand); no profile (v1): the project's gates (`_shared-commit-protocol.md`). Put the task id in the
 subject: `feat(m12): T4 import preview`. Never push. Capture the sha.
 
 ### Step 6: Update progress
 - The plan table row for this phase or task.
-- In `--lane` mode, also `.lane/progress.md`: current task, next step, open findings, test DB state.
+- In `--lane` mode, also `.lane/progress.md` (the progress-note format).
+
+### Step 6b: Context budget
+At a task boundary, if context has passed `limits.context_budget_tokens` (default 200,000) and tasks
+remain: commit, update the progress note, and end the session with the hand-back, `Status: session split`.
+The orchestrator relaunches you from the brief. Standalone, tell the user to resume with the same command.
 
 ### Step 7: Registry (standalone mode only)
 Update `blprnt-registry.md`: module status, tests, created files, and any deviation. In `--lane` mode the
@@ -115,6 +134,13 @@ orchestrator does this.
 
 ### Step 8: Continue
 Next phase or task, until all are complete.
+
+### Module end (once, after the last task)
+`tiers.lane_end` once, its independent checks at once: `node "$WH/scripts/workflow/run-tier.mjs" lane_end
+--parallel --base <base sha>` (`WH` per `_shared-project-profile.md`; heavy gates take their slot unless
+self-locking; an agent gate it lists is left to your verifier; script absent: each gate in order). Then
+`commands.test_lane_end` with `{base}` = your base sha, once. No profile (v1):
+`test-select --since <base>` once (`_shared-test-selection.md`, which also says when an escalated tier runs).
 
 ---
 
@@ -135,8 +161,8 @@ logged with a reason. No 5-iteration loop and no zero-Medium requirement.
 ### `--lane` mode
 Self-review in at most 2 sweeps, without launching agents:
 - the diff since your base against the blueprint's §6 acceptance criteria and §7A checks;
-- the project's CRITICAL list (CLAUDE.md invariants and hard guardrails);
-- UI parity pairs for every screen you own.
+- the project's CRITICAL list (`_shared-triage.md`);
+- every mockup state reachable on every screen you own.
 
 Fix CRITICAL, HIGH and normal-use findings, and list the rest. An independent verifier runs after your
 lane (`/implement-batch`), so report honestly rather than polishing.
@@ -159,7 +185,7 @@ Write the status to the plan file:
 ## Verification Status
 **Result**: ✅ PASSED | **Sweeps**: 1/2 | **Fixed**: CRITICAL 0, HIGH 3 | **Deferred**: 4 (listed below)
 **Stub Gate**: ✅ PASSED | Actionable: 0 | Blocked: N | MVP: M
-**UI parity**: 6 screens, 14 pairs (paths below)
+**UI parity**: 6 screens, 14 pairs (paths below), or `by the lane verifier`
 ```
 
 ---
@@ -181,23 +207,26 @@ Write the status to the plan file:
 
 ### `--lane` mode
 Update only the plan file, the blueprint's §11 Deviations and `.lane/progress.md`. Put everything else in
-the report; the orchestrator writes the task list, registry, status file and memory.
+the hand-back; the orchestrator writes the task list, registry, status file and memory.
 
 ---
 
 ## Final report
 
+Standalone:
 ```
 IMPLEMENTATION {COMPLETE ✅ | INCOMPLETE ❌ | STUB GATE FAILED ⚠️}
-PLAN: [name] | MODE: standalone|lane | BRANCH: [branch] | COMMITS: [first → last]
+PLAN: [name] | MODE: standalone | BRANCH: [branch] | COMMITS: [first → last]
 VERIFICATION: {PASS|FAIL} ({n}/2 sweeps) | fixed: CRITICAL n, HIGH n | open: [IDs]
 STUBS: actionable n | blocked n | MVP n
-TESTS: {selection} ({n} files) ✅ | escalated tiers deferred: {yes/no}
+TESTS: {command} ({n} files) ✅ | lane-end tier: {result}
 UI PARITY: {screens} screens, {pairs} pairs → [paths]
 DEFERRED: [finding — severity — why]   OWNER ITEMS: [...]   MIGRATIONS: [numbers]
 ```
 
-In `--lane` mode, keep the report to 40 lines, in the order its brief asks.
+`--lane` mode: the hand-back is your final reply, at most `limits.handback_lines` (default 30) lines, under
+the headings `_common.md` names: `Status` · `Commits` · `Tasks` · `Tests` · `Migrations` · `Screens` ·
+`Deviations` · `Deferred` · `Owner items` · `Merge notes`. Never write it to a report file.
 
 ---
 
@@ -206,13 +235,14 @@ In `--lane` mode, keep the report to 40 lines, in the order its brief asks.
 ### Must do
 - Execute autonomously; never ask permission (`_shared-autonomous.md`).
 - Mark items complete in the plan file immediately, with their commit shas.
-- Test what you changed, per `_shared-test-selection.md`; never the full suite.
-- Prove UI parity in a real browser for every screen you own.
+- Test what you changed, per `_shared-test-selection.md`: one call per task; never the full suite.
+- Build every screen to its mockup, every state reachable; parity is proven on the real stack.
 - Verify within the triage rules: at most 2 sweeps; CRITICAL and HIGH block.
 - Report Medium and Low findings as deferred, with reasons.
 
 ### Never do
-- Run the full suite or an escalated tier inside a lane.
+- Run the full suite, an escalated tier, or a cut-end or track-merge gate inside a lane.
+- End your turn while your own background job runs.
 - Chase Medium or Low findings past sweep 2.
 - Mark the module complete with an open CRITICAL or HIGH, or an actionable stub.
 - Push, use `--no-verify`, or `pkill`/`killall` by name.
@@ -233,14 +263,7 @@ In `--lane` mode, keep the report to 40 lines, in the order its brief asks.
 | Finding persists into sweep 2 | Log it as architectural; an Owner item if it needs a decision |
 | Stub fix breaks tests or types | Revert it, record "auto-fix failed", continue |
 | Context summarized mid-run | Re-read the plan file (and `.lane/progress.md`), then continue |
-
-## Blueprint mode specifics
-
-**Pre-flight (§12):** dependency status, interface import checks, LOCKED contracts unchanged, build
-chain. All must pass, or BLOCK.
-
-**Session guide (§13):** LOAD the module, impl spec and contracts → PRE-FLIGHT → IMPLEMENT in task
-order → VERIFY (§7A–7E, targeted) → UPDATE (standalone: registry; lane: report) → commit.
+| Context past the budget | Step 6b: split at the next task boundary |
 
 ## Usage
 
@@ -249,11 +272,4 @@ order → VERIFY (§7A–7E, targeted) → UPDATE (standalone: registry; lane: r
 /implement-plan context/blueprints/blprnt-M1.md      # a module blueprint
 /implement-plan context/blueprints/blprnt-M1.md --lane   # inside an /implement-batch lane
 /implement-plan "Phase 3"                            # resume from a phase
-```
-
-## Workflow integration
-
-```
-/plan → /analyze-plan → /blueprint → /design-ui → /implement-plan (this) → /verify-implementation → /commit
-/implement-batch → lane agents run /implement-plan --lane → independent verifier → orchestrator merge
 ```

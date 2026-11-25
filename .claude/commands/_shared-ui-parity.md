@@ -7,7 +7,8 @@ CRITICAL CONTENT - DO NOT MODIFY WITHOUT REVIEW
 Source commands: implement-plan, implement-batch, verify-ui, verify-implementation, design-ui
 Generated: 2026-10-27 (four defects passed code review and showed only in a browser: a dialog under an
 inert drawer layer, an unstyled drawer, a count never rendered, a flow that differed at 4 of 5 steps)
-Last audit: 2026-10-27
+Last audit: 2026-11-25 (v2: one parity pass, by the UI verifier, on the real stack after the API it reads
+has merged. Data-shaped defects had passed lane parity against faked routes and showed only on real data)
 -->
 
 # UI parity in a real browser
@@ -15,10 +16,19 @@ Last audit: 2026-10-27
 **A screen matches its mockup when a screenshot of the running app and a screenshot of the mockup, in the
 same state, show the same structure, copy and states.** Reading JSX against mockup HTML is not proof.
 
+## Who, when, on what
+
+- **One parity pass per screen,** taken by the UI verifier (in a batch, the lane's independent verifier;
+  standalone, the behaviour agent of `/verify-implementation`). The implementer builds to the mockup and may
+  look at its screens while building, but its screenshots are not the proof.
+- **On the real stack, after the API the screen reads has merged.** `/implement-batch` launches a lane only
+  once its inputs have merged, so the UI lane's verifier always has the real API.
+- **Fakes are for building, never for proof.** A pair taken against faked routes or streams does not count.
+
 ## Protocol
 
-1. **Run the app** on your own ports (lane or verifier), seeded so every state can be reached.
-2. **For each screen you own and each key state** in its mockup's state list, capture two screenshots
+1. **Run the app** on your own ports, on the real stack, seeded so every state can be reached.
+2. **For each screen under verification and each key state** in its mockup's state list, capture two screenshots
    with Playwright (or the project's browser tooling) at 1440×900 unless the project sets another size:
    - the mockup: `design/mockups/<area>/<screen>.html?state=<state>`;
    - the app, driven into the same state.
@@ -28,7 +38,7 @@ same state, show the same structure, copy and states.** Reading JSX against mock
    - structure, copy and state differences a user can see: HIGH, fix them;
    - a few pixels of spacing or a shade: LOW, log them;
    - differences in seeded data only: not a finding.
-6. **Report** every pair path, so the verifier and the owner can open them.
+6. **Report** every pair path, so the orchestrator and the owner can open them.
 
 No browser available is not a pass: report UI parity as `NOT PROVEN` with the reason.
 

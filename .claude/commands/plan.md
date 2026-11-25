@@ -1,13 +1,17 @@
 ---
-description: Interactive planning command that transforms an initial idea into a comprehensive, implementation-ready plan. Gathers requirements through clarifying questions, generates structured plan, and auto-invokes /analyze-plan for gap detection and iterative refinement.
+description: Interactive planning command that transforms an initial idea into a comprehensive, implementation-ready plan. Gathers requirements through clarifying questions, generates structured plan, and auto-invokes /analyze-plan for one review round of gap detection and fixes.
 ---
 # Plan Command
 
-Transform an initial idea into a comprehensive, implementation-ready plan through structured discovery and iterative refinement.
+Transform an initial idea into a comprehensive, implementation-ready plan through structured discovery and one review round.
 
-**Workflow**: `/plan → /recommend-agents → /blueprint → /design-ui (if UI) → /implement-plan → /verify-implementation → /commit`
+**Workflow**: `/plan → /recommend-agents → /blueprint (with /design-ui for UI modules) → /implement-plan → /verify-implementation → /commit`
 
-Note: `/analyze-plan` runs automatically at the end of Phase 6.
+Note: `/analyze-plan` runs automatically in Phase 6, once per MVP or cut.
+
+**MVP first.** The plan opens with its MVP paragraph (Phase 1.5). It is agreed with the owner before any
+research, question round or plan text, because the interaction model, the entry states and the UI words
+shape every module: decided later, they re-spec modules that are already blueprinted.
 
 ## Arguments
 
@@ -17,14 +21,15 @@ Note: `/analyze-plan` runs automatically at the end of Phase 6.
 | `--quick` | Skip deep discovery; generate from input directly |
 | `--no-analyze` | Skip automatic `/analyze-plan` invocation |
 | `--tech <stack>` | Pre-specify technology stack |
-| `--research` | Enable web research without confirmation |
+| `--research` | Enable web research without confirmation (still after the MVP paragraph is agreed) |
 | `--no-research` | Skip web research entirely |
 
 ## Phases Overview
 
 ```
 Phase 1: Input Analysis & Domain Detection
-Phase 1.5: Research (optional, user-confirmed)
+Phase 1.5: MVP Paragraph (agreed with the owner)
+Phase 1.6: Research (optional, user-confirmed; after 1.5)
 Phase 2: Clarifying Questions (interactive)
 Phase 3: Requirements Synthesis
 Phase 4: Plan Generation → context/plans/plan-[name]-[date].md
@@ -62,13 +67,18 @@ CORE_PROBLEM: [1-2 sentence problem statement]
 
 ### 1.3: Gather Project Context
 
-Read: `CLAUDE.md`, `package.json`/`go.mod`/`requirements.txt`, `context/blueprints/`, `context/plans/`
+Read: `CLAUDE.md`, `package.json`/`go.mod`/`requirements.txt`, `context/blueprints/`, `context/plans/`, and the
+project profile's `docs.*` entries when one exists (`~/.claude/commands/_shared-project-profile.md`).
+
+**Find the UI brief**, the project's binding rules for screens and words: the profile's `docs.ui_brief` when
+set, else a UI section of CLAUDE.md, else `design/**/*brief*.md`. None found: say so in the MVP paragraph.
 
 Build context:
 ```
 EXISTING_PROJECT: [yes/no]
 TECH_STACK: [detected or TBD]
 CONSTRAINTS: [from CLAUDE.md frozen params]
+UI_BRIEF: [path, or none]
 RELATED_MODULES: [if extending]
 ```
 
@@ -86,14 +96,39 @@ RELATED_MODULES: [if extending]
 | Integration | External connections | ✓/✗ | LOW |
 | Scale | Performance/volume | ✓/✗ | LOW |
 
-**Quick mode (`--quick`)**: Skip to Phase 3 if no CRITICAL gaps.
+**Quick mode (`--quick`)**: Write the MVP paragraph (1.5), then skip to Phase 3 if no CRITICAL gaps.
 
 ---
 
-## Phase 1.5: Research (Optional, User-Confirmed)
+## Phase 1.5: MVP Paragraph (agreed before anything else)
+
+Draft the paragraph from the input and context, then confirm it with `AskUserQuestion` (one round, up to 4
+questions, on the fields you could not infer). Research, the question rounds and the plan text all wait until
+the owner agrees it. It becomes the plan's §0.
+
+| Field | States |
+|---|---|
+| Who | the user, in the project's own words |
+| End to end | what they do, from the entry point to the outcome |
+| Acceptance scenario | **one** scenario that must work on the target environment through the real UI (or the real API, for a headless feature); "done" means it works |
+| Interaction model | how the user and the system exchange work: request/response or batch, streamed, background job with progress, polled, push. Name what the user sees while waiting |
+| Entry states | **at rest** (how the user finds it with nothing in progress), **after reload** (what survives a refresh or a new session), **empty** (first use, nothing yet) |
+| UI words | the names of the screens, actions, states and statuses the user reads, each checked against the UI brief's word rules; a word the brief forbids is replaced here, not in design |
+| After the MVP | each deferred item with its phase and the trigger that brings it in |
+
+Never cut what the project's invariants, the law, a vendor, security or data integrity needs; those stay in
+the MVP whatever its size. A headless MVP states "no UI" for the UI words and the API's entry states instead.
+
+**Record** the agreed paragraph in the owner-decisions file (Phase 2) as its first row.
+
+---
+
+## Phase 1.6: Research (Optional, User-Confirmed)
 
 **Skip if**: `--no-research` or `--quick` flag.
 **Auto-proceed if**: `--research` flag.
+**Starts only after the MVP paragraph is agreed**, and researches the MVP's scope; the After-the-MVP items are
+researched in their own phase.
 
 ### Research Value Assessment
 
@@ -134,9 +169,7 @@ If confirmed:
 
 ### Question Templates (use AskUserQuestion)
 
-**Round 1: Problem & Users** (if gaps)
-- Who is the primary user? Options: End users / Internal team / Developers / Multiple types
-- What is the core problem? Options: [inferred] / Different problem
+**Round 1: Problem & Users**: settled by the MVP paragraph (1.5); ask only what it left open.
 
 **Round 2: Scope & Boundaries**
 - What is explicitly OUT of scope? (multiSelect): Admin features / Advanced search / Real-time collab / Offline support
@@ -192,6 +225,12 @@ If confirmed:
 # Plan: [Name]
 **Generated**: [timestamp] | **Status**: 📝 Draft | **Source**: /plan
 **Branch**: [integration branch the work lands on] | **Production**: [what must not change, e.g. "production stays as is"] | **Decisions**: [owner-decisions file]
+
+## 0. MVP Scope
+[The agreed paragraph from Phase 1.5: who, end to end, the acceptance scenario, interaction model,
+entry states (at rest · after reload · empty), UI words (checked against: [UI brief path or "none"])]
+### After the MVP
+| Item | Phase | Trigger |
 
 ## 1. Executive Summary
 [2-3 sentences: what, for whom, key value]
@@ -249,7 +288,7 @@ can build one cut at a time.
 ```
 
 ### Phase Design Guidelines
-1. Each phase = vertical slice (testable/demoable)
+1. Each phase = vertical slice (testable/demoable); the first one delivers the acceptance scenario
 2. Foundation first (infra, auth, logging)
 3. Dependencies flow forward (N never depends on N+1)
 4. 3-5 phases typical
@@ -285,13 +324,13 @@ Phases: [N] | Tech: [stack] | Risks: [count] | Questions: [count]
 Use `Skill` tool: `skill: "analyze-plan"`, `args: "context/plans/plan-[name]-[date].md"`
 
 The `/analyze-plan` command:
-1. Runs 5 parallel analysis agents (completeness, security, logging, testing, feasibility)
-2. Generates maturity score (X/100)
-3. Identifies gaps by severity (CRITICAL/HIGH/MEDIUM/LOW)
-4. Prompts gap selection and auto-generates remediation plan
-5. Applies the remediation to the **plan document** (a single-phase plan may go straight to `/implement-plan`; a multi-module plan goes to `/blueprint` and never starts code from the remediation)
+1. Runs one review round per MVP or cut: 2 reviewers by default (5 with `--deep`)
+2. Generates maturity score (X/100) and gaps by severity (CRITICAL/HIGH/MEDIUM/LOW)
+3. Fixes CRITICAL and HIGH without asking, through a fix agent; lists MEDIUM and LOW for the owner in one line
+   (legal, security and compliance findings are never deferred)
+4. Applies the fixes to the **plan document** (a single-phase plan may go straight to `/implement-plan`; a multi-module plan goes to `/blueprint` and never starts code from the remediation)
 
-**Iteration Guard**: After 3 runs without improvement → recommend manual review.
+A later edit to the plan is reviewed by re-running `/analyze-plan`, which reviews only the text added since.
 
 ---
 
@@ -342,13 +381,14 @@ Add to `context/implementation-status.md` Active Plans section if exists.
 ```
 USER IDEA → /plan (this command)
   ├─ Phase 1: Input Analysis
-  ├─ Phase 1.5: Research (optional)
+  ├─ Phase 1.5: MVP paragraph (agreed)
+  ├─ Phase 1.6: Research (optional)
   ├─ Phase 2-4: Q&A + Requirements + Generation
   ├─ Phase 5: User Review
   ├─ Phase 6: /analyze-plan (auto) → gap detection → remediation applied to the plan
   └─ Phase 7: Handoff
          ↓
-/recommend-agents → /blueprint → /design-ui → /implement-batch (multi-module) or /implement-plan → /commit
+/recommend-agents → /blueprint (contracts LOCKED → /design-ui writes UI §4 → module specs) → /implement-batch (multi-module) or /implement-plan → /commit
               └─ Output: design/wireframes/**/*.md, design/mockups/**/*.html
 ```
 
@@ -358,7 +398,7 @@ USER IDEA → /plan (this command)
 |--------|-------|------------|---------------|
 | Input | Idea/outline | Structured plan | Existing plan |
 | Output | Implementation-ready plan | Three-layer system + registry | Gap analysis + score |
-| Interactive | Yes (Q&A) | No | Partial (gap selection) |
+| Interactive | Yes (MVP paragraph, Q&A) | No | One-line owner list (MEDIUM/LOW) |
 | Tech decisions | Makes + justifies | Assumes made | Evaluates quality |
 | When | Start of planning | After plan solid | After plan exists |
 

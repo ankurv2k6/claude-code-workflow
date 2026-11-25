@@ -98,8 +98,9 @@ The goal: **maximize Claude Code's effectiveness on real, multi-week projects** 
 |----------|---------|--------------|
 | `~/.claude/commands/` | Shared slash commands symlinked from this repo | None (on-demand) |
 | `~/.claude/_repo/` | Agent repository catalog (`AGENT-INDEX.md`), sourced from [VoltAgent/awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) | None (read-only source) |
-| `~/.claude/templates/` | Templates the commands copy into a project: living task list, lane briefs, hard-guardrails snippet, test-map guide (symlinked from this repo) | None (on-demand) |
+| `~/.claude/templates/` | Templates the commands copy into a project: living task list, lane briefs, hard-guardrails snippet, test-map guide, profile schema and example, a user-level CLAUDE.md example (never installed) (symlinked from this repo) | None (on-demand) |
 | `~/.claude/plans/` | Standalone plan files for any project | None (on-demand) |
+| `~/.claude/workflow-release/` | Pinned checkout of a tagged release (`WORKFLOW_HOME`); `~/.claude/commands` and `templates` point here from 2.0.0 | None (on-demand) |
 
 ### Project Directories (`<project>/`)
 
@@ -109,6 +110,7 @@ The goal: **maximize Claude Code's effectiveness on real, multi-week projects** 
 | `.claude/agents/` | Installed project-specific agents | **Auto-loaded** |
 | `.claude/commands/` | Project-specific slash commands | None (on-demand) |
 | `.claude/sessions/` | Slack thread session IDs | None (gitignored) |
+| `.claude/workflow-profile.json` | Project profile: commands, gates by tier, test DBs, ports, limits (`_shared-project-profile.md`) | On-demand |
 | `context/plans/` | Generated plan files from `/plan` | On-demand |
 | `context/blueprints/` | Architecture specs (Layer 1) + registry | On-demand |
 | `context/implementation/` | Code-level specs (Layer 2) | On-demand |
@@ -119,6 +121,7 @@ The goal: **maximize Claude Code's effectiveness on real, multi-week projects** 
 | `context/batch-briefs/` | One brief per lane agent plus shared `_common.md` / `_verify.md` — what a relaunch uses | On-demand |
 | `context/testing/` | Test map + `TESTING.md` for targeted test selection | On-demand |
 | `context/TODOS.md` | Project TODO registry from `/todo` | On-demand |
+| `context/workflow-lessons.md` | Classified lessons per batch from `/workflow-sync` | On-demand |
 | `design/wireframes/` | UI wireframes in Markdown + ASCII | On-demand |
 | `design/mockups/` | Interactive HTML/CSS/JS prototypes | On-demand |
 
@@ -326,9 +329,10 @@ standing rules word for word.
 | `_shared-effort-budget.md` | Effort, form and report size per agent role; delegation and token rules |
 | `_shared-agent-timeout.md` | Completion by notification, stall detection, graceful degradation |
 | `_shared-commit-protocol.md` | Commit format, session attribution, gates from CLAUDE.md, push policy |
+| `_shared-project-profile.md` | The project profile: keys, defaults and v1 fallback, gate registry and tiers, where a lesson belongs, apply by risk, provenance |
 
 Run `node scripts/check-skills.mjs` after editing any command. It fails on retired phrases, broken
-references and stray tags.
+references, stray tags and profile keys the schema does not define.
 
 ---
 
@@ -351,6 +355,7 @@ For multi-module batch execution:
 - `/blueprint --verify` runs automatically after `/blueprint` unless `--no-verify` is specified
 - Verification (at most 2 sweeps) runs automatically inside `/implement-plan` after all phases complete
 - Stub gate runs automatically after a verification PASS
+- `/workflow-sync` runs as the last step of `/implement-batch`
 
 ---
 
@@ -443,7 +448,7 @@ State machine: `OPEN → BLOCKED → READY_TO_REOPEN → IN_PROGRESS → RESOLVE
 
 | Command | Purpose | Key Flags | Output |
 |---------|---------|-----------|--------|
-| `/design-ui` | Generate wireframes (Markdown + ASCII) from a plan under a binding declutter brief (Show / On demand / Omit). Discovers and follows the project's existing design system. Foundation agent first, then one agent per area of 3–6 screens, then a consolidation pass. | `[plan-path]`<br>`--with-mockups` (HTML/CSS/JS prototypes)<br>`--mockups-only`, `--module <name>`<br>`--update`, `--verify`, `--sync-blueprints`, `--guide`<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if `--with-mockups`) |
+| `/design-ui` | Generate wireframes (Markdown + ASCII) from a plan under a binding declutter brief (Show / On demand / Omit). Discovers and follows the project's existing design system. Foundation agent first, then one agent per area of 3–6 screens, then a consolidation pass. | `[plan-path]`<br>`--with-mockups` (HTML/CSS/JS prototypes)<br>`--mockups-only`, `--module <name>`<br>`--update`, `--verify`, `--guide`<br>`--areas=<n>` (screens per area agent) | `design/wireframes/{Feature}/*.md`<br>`design/mockups/{Feature}/*.html` (if `--with-mockups`) |
 
 UI parity is part of every UI task in `/implement-plan` and of verification: real-browser screenshot pairs of mockup and app in each state (`_shared-ui-parity.md`). A visible structure, copy or state difference is HIGH, so parity is gated, not optional.
 
@@ -455,6 +460,7 @@ UI parity is part of every UI task in `/implement-plan` and of verification: rea
 |---------|---------|-----------|--------|
 | `/sync-context` | Incrementally update context files (CLAUDE.md, status, registry) based on git history. Delta-based syncing with registry reconciliation. | `status` (show state only)<br>`--full` (ignore last sync)<br>`--exhaustive` (deep codebase scan → CLAUDE.md enrichment)<br>`--dry-run`, `--verbose` | Updated context files, sync state |
 | `/optimize-context` | Audit and compress auto-loaded files (CLAUDE.md, rules, MEMORY.md). Extracts sections to skills, path-scopes rules, archives old plans. | `audit` (read-only report)<br>`--dry-run`<br>`--plans-age=<N>` (default 30 days)<br>`--docs-age=<N>` (default 60 days) | Audit report, compressed files, archived content |
+| `/workflow-sync` | Harvest a batch's lessons from its artifacts on disk, classify them (skill, profile, user level, CLAUDE.md, memory), diff the project profile, apply only mechanical additions. Never edits a skill. | `[task-list-or-report]`<br>`--apply-additions` (orchestrator only)<br>`--dry-run` | `context/workflow-lessons.md`, profile diff, Owner items, generic proposals |
 
 ---
 
@@ -1198,6 +1204,21 @@ ln -s ~/claudeworkflow/.claude/templates ~/.claude/templates
 
 Every project then inherits the commands. A `git pull` in `~/claudeworkflow` updates them everywhere.
 
+**Versioning (2.0.0 and later).** `VERSION` holds the workflow version and `CHANGELOG.md` its behaviour
+changes. `scripts/workflow/release.sh v<version> --apply` pins `~/.claude/commands` and `templates` to a
+tagged checkout at `~/.claude/workflow-release`; the same command with the previous tag rolls back.
+Skills find the generic scripts at `$WH/scripts/workflow/`: `$WORKFLOW_HOME` when set (a worktree, to test
+unreleased scripts), else that checkout, else the repo `~/.claude/commands` points into (a v1 install
+before any release). Each batch is pinned to the version in its task list. Switch-over to a new major
+version: `release.sh v1.0.0 --apply` first, then merge and tag, then `release.sh v2.0.0 --apply`
+(`CHANGELOG.md`).
+The scripts: `profile-check`, `profile-diff`, `scaffold`, `slot.sh`, `watchdog`, `orch-event`, `run-tier`
+(one tier's gates), `merge-lane` (a lane merge with renumber, journal check and the merge tier),
+`build-report` (cost, rule breaches, critical path) and `release.sh`; each has `--help`.
+
+**Project profile (optional).** Copy `.claude/templates/workflow-profile.example.json` to
+`<project>/.claude/workflow-profile.json` and edit it. Without one, a project's mechanics stay as in 1.x.
+
 ### 1. Bootstrap a new project
 
 ```bash
@@ -1258,6 +1279,7 @@ $ claude
 | `context/plans/plan-*.md` | `/plan` | Implementation-ready plan from idea |
 | `context/implementation-status.md` | `/implement-plan` | Module status tracking |
 | `context/batch-progress.md` | `/implement-batch` | Batch execution progress and checkpoints |
+| `context/workflow-lessons.md` | `/workflow-sync` | Classified lessons per batch |
 | `context/.sync-state.json` | `/sync-context` | Incremental sync state (gitignored) |
 | `context/blueprints/blprnt-*.md` | `/blueprint` | Architecture specs |
 | `context/blueprints/blprnt-registry.md` | `/blueprint` | Cross-module progress + deviations |
