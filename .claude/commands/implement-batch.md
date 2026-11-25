@@ -326,7 +326,8 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
 
 **The full run happens once, in step 3, after the final's fixes have merged.** Nothing before it runs
 `commands.test_full` (or `--tier full`): not the cut-end tier (`profile-check` refuses a tier gate whose
-command is the full run), not the combined final, not a fix agent.
+command is the full run), not the combined final, not a fix agent. A worktree the final phase runs in that keeps a
+`.lane/` scratch folder is marked first, `echo final > .lane/role`: a project's lane guards apply to lanes only.
 
 ### 1. Cut-end checks
 1. **The invariant suites, first:** `commands.test_task` with `{files}` = every `invariant_suites` path, in
