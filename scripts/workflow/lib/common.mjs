@@ -93,7 +93,20 @@ export function defaultProfilePath(cwd = process.cwd()) {
   return join(projectRoot(cwd), '.claude', 'workflow-profile.json');
 }
 
-export const PLACEHOLDERS = ['files', 'base', 'name', 'url', 'port', 'lane', 'set'];
+/** Placeholders of commands.*, gates, merge.* and test_db.* commands. */
+export const CORE_PLACEHOLDERS = ['files', 'base', 'name', 'url', 'port', 'lane', 'set'];
+
+/** Placeholders each tests.* and release.* key may use (_shared-project-profile.md). */
+export const KEY_PLACEHOLDERS = {
+  'tests.heavy_lock': ['owner', 'cmd'],
+  'tests.merge_delta': ['ours', 'theirs', 'url'],
+  'release.hotfix_start': ['hotfix'],
+  'release.hotfix_finish': ['hotfix', 'release_branch'],
+  'release.package': ['bundle'],
+  'release.deploy': ['bundle', 'description'],
+};
+
+export const PLACEHOLDERS = [...CORE_PLACEHOLDERS, 'owner', 'cmd', 'ours', 'theirs', 'hotfix', 'release_branch', 'bundle', 'description'];
 
 /** Placeholders named in a command string. */
 export const placeholdersIn = (cmd) => [...String(cmd).matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]);
@@ -108,7 +121,8 @@ export const shellWord = (v) => {
  * Fill {placeholders}; returns { cmd, missing } where missing lists unfilled names.
  * Values are shell-quoted (quote: false for plain names such as test_db.name_pattern), so a
  * value can never inject shell: {files} is split on whitespace (or given as an array) and each
- * path becomes one quoted word; every other value becomes one quoted word.
+ * path becomes one quoted word; every other value, {cmd} and {description} included, becomes ONE
+ * quoted word (a script given {cmd} runs it with bash -c).
  */
 export function fill(cmd, values, { quote = true } = {}) {
   const missing = [];

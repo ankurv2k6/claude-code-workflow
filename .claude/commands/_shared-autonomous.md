@@ -34,7 +34,8 @@ Apply these, and copy them word for word into every agent brief:
    in the same state (`~/.claude/commands/_shared-ui-parity.md`).
 2. **Targeted tests only.** Run what the selector names for the files you changed, once. Never the
    full suite, never the same broad set twice. The orchestrator makes one full run per batch, on the
-   final head (`~/.claude/commands/_shared-test-selection.md`).
+   final head (`~/.claude/commands/_shared-test-selection.md`); it is the release candidate's one run
+   when the release branch gets that same head.
 3. **Fix what matters.** CRITICAL, HIGH and normal-use breaks get fixed; the rest is logged with a
    reason. At most 2 sweeps (`~/.claude/commands/_shared-triage.md`).
 4. **Keep the living task list.** Only the orchestrator writes it; agents report into it.
@@ -48,7 +49,8 @@ These hold in every project:
 
 - **No push of the default branch, or of any branch whose push deploys, and no deploy, without the
   owner's approval of that specific push or deploy** (it may be given up front with the request;
-  `_shared-commit-protocol.md`). Agents launched by a command never push.
+  `_shared-commit-protocol.md`). Agents launched by a command never push, and never deploy: only the
+  session the owner spoke to runs `release.deploy`.
 - **Never `--no-verify`.** Never force-push the default branch.
 - **Never `pkill`, `killall` or kill by process name.** Stop only PIDs you started.
 - **Work only in your own worktree, databases and ports.**

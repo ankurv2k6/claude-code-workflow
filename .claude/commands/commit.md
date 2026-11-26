@@ -30,8 +30,9 @@ git log --oneline -5
 ### Step 2: Security & Integrity Checks
 
 Stage first (`git add -A`), then run these checks **on the staged diff, before committing**; the profile's
-`tiers.per_commit`, or the project's hook, replaces those it covers. STOP and report if any fail (the files
-stay staged; nothing is committed).
+`tiers.per_commit`, or the project's hook, replaces those it covers. STOP and report if any fail (nothing is
+committed; on a secret or sensitive-file stop, 2b or 2c, unstage the flagged files with `git restore --staged
+<files>`).
 
 #### 2a. Gitleaks Secret Scan (Required)
 
@@ -102,15 +103,18 @@ git diff --cached | grep -E \
 Run type checking and linting on changed files. **STOP if errors found**.
 
 ```bash
-# TypeScript: the profile's commands.typecheck when set; else tsc --build on the changed packages.
-# A root `tsc --noEmit` on a solution-style tsconfig ("files": [] + references) checks nothing.
+# TypeScript: the profile's commands.typecheck when set. Else, per changed package: tsc --build for a
+# solution-style tsconfig ("files": [] + references; a root --noEmit there checks nothing), else
+# tsc --noEmit -p (--build on an ordinary tsconfig emits .js beside the sources).
 if [ -f "tsconfig.json" ]; then
   tc=$(jq -r '.commands.typecheck // empty' .claude/workflow-profile.json 2>/dev/null)
   if [ -n "$tc" ]; then eval "$tc"
   else
-    pkgs=$(git diff --cached --name-only | while read -r f; do d=$(dirname "$f")
-      while [ "$d" != . ] && [ ! -f "$d/tsconfig.json" ]; do d=$(dirname "$d"); done; echo "$d"; done | sort -u)
-    npx tsc --build $pkgs
+    git diff --cached --name-only | while IFS= read -r f; do d=$(dirname "$f")
+      while [ "$d" != . ] && [ ! -f "$d/tsconfig.json" ]; do d=$(dirname "$d"); done; echo "$d"; done |
+    sort -u | while IFS= read -r d; do
+      if grep -q '"files": *\[ *\]' "$d/tsconfig.json"; then npx tsc --build "$d"; else npx tsc --noEmit -p "$d"; fi
+    done
   fi
 fi
 
@@ -251,7 +255,7 @@ If rejected: `git fetch && git rebase origin/<branch>` then retry. Never force-p
 
 ## Version History
 
-- **2026-11-26**: Stage first, then gates on the staged diff (`gitleaks protect --staged`, a scoped `tsc --build` or the profile's typecheck)
+- **2026-11-26**: Stage first, then gates on the staged diff (`gitleaks protect --staged`; the profile's typecheck, else `tsc --build` for a solution-style tsconfig or `tsc --noEmit -p` per package)
 - **2026-10-27**: Push policy (deploying branches need `--push`); attribution from the session; test-map check
 - **2026-02-23**: Added gitleaks, secret scanning, TypeScript/ESLint/Prettier checks; explicit no-tests policy
 - **2026-01-22**: Condensed for context efficiency

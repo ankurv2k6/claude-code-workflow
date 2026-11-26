@@ -16,8 +16,8 @@
     },
     "commands": {
       "test_task": "TEST_DATABASE_URL={url} node scripts/test-select.mjs --files {files} --tier quick --max-tier quick --run",
-      "test_lane_end": "TEST_DATABASE_URL={url} node scripts/test-select.mjs --since {base} --tier quick --max-tier quick --run",
-      "notes": "test_task and test_lane_end run the quick tier (the changed packages' tests, the tests that read their output, the static pins) and never escalate: when the selector asks for more, the lane reports 'escalated, deferred' and runs nothing broader, not vitest related (700+ files, 89 min on 2026-11-26). {base} is the lane's base on the integration branch, or release/beta for a hotfix, never main (a selector without a base diffs against main and selected the full suite). The one wide run is commands.test_full, once per release candidate, under tests.heavy_lock. typecheck is incremental (tsc --build, emits dist); typecheck_clean (tsc --build --force) is for a suspect build info and the cut-end gate. Every test command carries the lane's own TEST_DATABASE_URL on :5437, never :5433 or :5434. cleanup_list is read-only (worktrees, branches, test DBs, ports a batch leaves), run once at batch close. commands.test_full runs through the full_run slot (gates.full-run)."
+      "test_lane_end": "TEST_DATABASE_URL={url} node scripts/test-select.mjs --since {base} --max-tier standard --run",
+      "notes": "test_task runs the quick tier (the changed packages' tests, the tests that read their output, the static pins); test_lane_end stays capped at standard (lanes merge into integration, so lane-end coverage is not reduced). Neither escalates past its cap: when the selector asks for more, the lane reports 'escalated, deferred' and runs nothing broader, not vitest related (700+ files, 89 min on 2026-11-26). {base} is the lane's base on the integration branch, or release/beta for a hotfix, never main (a selector without a base diffs against main and selected the full suite). The one wide run is commands.test_full, once per release candidate, under tests.heavy_lock. typecheck is incremental (tsc --build, emits dist); typecheck_clean (tsc --build --force) is for a suspect build info and the cut-end gate. Every test command carries the lane's own TEST_DATABASE_URL on :5437, never :5433 or :5434. cleanup_list is read-only (worktrees, branches, test DBs, ports a batch leaves), run once at batch close. commands.test_full runs through the full_run slot (gates.full-run)."
     }
   },
   "unchanged_on_purpose": {
@@ -26,17 +26,19 @@
     "gates.gitleaks-staged / typecheck-touched / eslint-staged / prettier-staged": "already staged-diff gitleaks, an incremental tsc --build of the touched references, and staged lint and prettier: the 2.1.0 commit-gate rules hold already."
   },
   "owner_items_outside_the_profile": [
-    "scripts/merge-gate.sh runs `test-select --since <since> --tier standard --run`: switch that selection to `--merge <ours> <theirs> --tier quick --max-tier quick` (or drop it for tests.merge_delta), so a merge never runs a broad selection.",
     "scripts/test-select.mjs: add --merge <ours> <theirs>, and make a missing base an error rather than a diff against main.",
-    "scripts/heavy-lock.sh: `run --owner <label> -- <cmd>`, exporting IDN_HEAVY_LOCK_TOKEN to the child; a call that carries a live token joins the hold instead of waiting; the waiting message names the holder's label.",
+    "scripts/heavy-lock.sh: `run --owner <label> -- <cmd>`, exporting IDN_HEAVY_LOCK_TOKEN to the child; {cmd} arrives as ONE shell-quoted word, so the script runs it with bash -c; a call that carries a live token joins the hold instead of waiting; the waiting message names the holder's label.",
     "context/testing/known-reds.md: the runners (test-select --run, test:full:sharded) should print reds as known/new against it, and list a known file that passed for removal."
   ],
   "provenance": [
     {
-      "path": "tests.heavy_lock, tests.heavy_lock_token, tests.merge_delta, release.*, commands.test_task, commands.test_lane_end",
+      "path": "tests.heavy_lock, tests.heavy_lock_token, tests.merge_delta, release.*, commands.test_task",
       "source": "~/claudeworkflow/context/proposals/idnunified-profile-2.1.0.json (workflow 2.1.0, branch v2.1)",
       "date": "2026-11-26",
-      "change": "one heavy job per machine through scripts/heavy-lock.sh; the merge delta run; the hotfix path off release/beta with package beside the wide run and deploy --when-safe; quick tier with no escalation in lanes and tasks"
+      "change": "one heavy job per machine through scripts/heavy-lock.sh; the merge delta run; the hotfix path off release/beta with package beside the wide run and deploy --when-safe; the quick tier per task with no escalation"
     }
+  ],
+  "coverage_owner_items": [
+    "Lane-end tier and merge-gate.sh `--tier standard` -> a `--merge <ours> <theirs>` delta: a coverage decision for the owner, not made here. This proposal keeps test_lane_end at --max-tier standard and leaves merge-gate.sh as it is; tests.merge_delta is the delta run each merge adds. Moving either to the delta narrows what a merge proves, so it waits for the owner."
   ]
 }

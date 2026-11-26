@@ -96,6 +96,10 @@ stage, the 30-line hand-back, the context budget, the watchdog) apply with or wi
 | `{ours}` · `{theirs}` | `tests.merge_delta`: the target head before the merge and the head merged in |
 | `{hotfix}` · `{release_branch}` · `{bundle}` · `{description}` | `release.*`: the hotfix name, `docs.release_branch`, the bundle path, the deploy description |
 
+Every value is passed as ONE shell-quoted word except `{files}` (one word per path): `{cmd}` and
+`{description}` included, so a script given `{cmd}` runs it with `bash -c`. `profile-check` validates the
+`tests.*` and `release.*` placeholders per key.
+
 A command with an unfilled placeholder is not run. A test DB host outside `test_db.allow_hosts` is
 refused.
 

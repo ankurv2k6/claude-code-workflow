@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readJson, placeholdersIn, quotedPlaceholders, PLACEHOLDERS, fill } from './common.mjs';
+import { readJson, placeholdersIn, quotedPlaceholders, CORE_PLACEHOLDERS, KEY_PLACEHOLDERS, fill } from './common.mjs';
 import { validate } from './schema.mjs';
 import { workflowHome } from './home.mjs';
 
@@ -67,11 +67,15 @@ export function semanticErrors(p) {
     ['$.test_db.create', p.test_db?.create],
     ['$.test_db.bootstrap', p.test_db?.bootstrap],
   ];
-  for (const [path, c] of cmds) {
+  for (const [key, known] of Object.entries(KEY_PLACEHOLDERS)) {
+    const [root, k] = key.split('.');
+    cmds.push([`$.${key}`, p[root]?.[k], known]);
+  }
+  for (const [path, c, known = [...CORE_PLACEHOLDERS, 'host']] of cmds) {
     if (typeof c !== 'string') continue;
     for (const ph of placeholdersIn(c))
-      if (!PLACEHOLDERS.includes(ph) && ph !== 'host')
-        errs.push(`${path}: unknown placeholder {${ph}} (known: ${PLACEHOLDERS.join(', ')})`);
+      if (!known.includes(ph))
+        errs.push(`${path}: unknown placeholder {${ph}} (known: ${known.filter((x) => x !== 'host').join(', ')})`);
     for (const ph of quotedPlaceholders(c))
       errs.push(`${path}: placeholder {${ph}} is inside quotes; leave it bare, the scripts shell-quote every value`);
   }

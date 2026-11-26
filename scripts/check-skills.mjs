@@ -77,6 +77,7 @@ const PROFILE_ROOTS = [
   'known_reds', 'logs_dir', 'invariant_suites', 'tests', 'release',
 ];
 const PROFILE_KEY = new RegExp(`^\\.?(${PROFILE_ROOTS.join('|')})((?:\\.[\\w*-]+)*)$`);
+const FILE_EXT = /\.(sh|mjs|cjs|js|ts|json|md|ya?ml|py|txt)$/;
 const schema = existsSync(SCHEMA) ? JSON.parse(readFileSync(SCHEMA, 'utf8')) : null;
 
 /** Walk a dotted path through the schema; `*` matches any defined key. */
@@ -115,6 +116,8 @@ for (const file of [...commandFiles, ...templateFiles]) {
   for (const m of file.endsWith('.md') ? text.matchAll(/`([^`\n]+)`/g) : []) {
     const key = m[1].match(PROFILE_KEY);
     if (!key) continue;
+    // `release.sh`, `tests.mjs`: a file name, not a key under the 2.1 roots.
+    if (['tests', 'release'].includes(key[1]) && FILE_EXT.test(m[1])) continue;
     if (!schema) {
       problems.push(`${rel(file)}: names profile key \`${m[1]}\` but ${rel(SCHEMA)} is missing`);
       break;

@@ -66,7 +66,8 @@ sweep 1; sweep 2 re-checks only the fixes (Phase 6).
 
 6. **The risk focus** (`_shared-triage.md`):
    - **the delta:** `git diff --name-only <base>...HEAD` (base: the lane's base, or the plan's start
-     commit; for a hotfix the release branch; never the default branch), plus **its callers**: the files that import or call what changed;
+     commit; for a hotfix the release branch; never the moving tip of the default branch: with no release
+     branch, the merge-base), plus **its callers**: the files that import or call what changed;
    - **the focus list:** each `risk_routing` route whose `paths` match a changed file adds its `reason`,
      and its `verifier` as the agent type for the checklist it covers. No profile (v1): the module's
      invariants, its screens with the most states, new routes and new cross-package dependencies.
@@ -309,8 +310,8 @@ VERDICT: [READY FOR PR / NOT READY / INCOMPLETE - MANUAL REVIEW REQUIRED]
 - **A fix to shared code** (a file other modules import) runs its callers' tests too.
 - Tests: `commands.test_task` with the files the fixes changed, in one call. No profile (v1): the selection
   for those files (`_shared-test-selection.md`); an escalated tier is reported and deferred, never run.
-- Typecheck (`commands.typecheck`; no profile (v1): `tsc --build` on the changed packages, never a root
-  `tsc --noEmit` over a solution-style tsconfig) and build. At most 3 attempts per failure.
+- Typecheck (`commands.typecheck`; no profile (v1): `tsc --noEmit -p <pkg>` per changed package, or `tsc
+  --build` for a solution-style tsconfig, where a root `--noEmit` checks nothing) and build. At most 3 attempts per failure.
 
 `REMEDIATION: CRITICAL X/X | HIGH X/Y (Z deferred) | MEDIUM logged | LOW logged | INFO X | BLOCKED Z`
 

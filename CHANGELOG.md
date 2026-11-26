@@ -26,6 +26,19 @@ Profile schema: new `tests` (`heavy_lock`, `heavy_lock_token`, `merge_delta`) an
 never executes a deploy. Absent, each takes the default in `_shared-project-profile.md`; a 2.0.0 profile is
 valid unchanged. `check-skills.mjs` checks the two new roots and retires `gitleaks detect`.
 
+### Review fixes (before the 2.1.0 tag)
+
+- Agents launched by a command never deploy; only the session the owner spoke to runs `release.deploy`.
+  Up-front approval covers one deploy of the named change and lapses on scope growth, a re-scope after a
+  red, or a second deploy.
+- Typecheck fallback: `tsc --build` only for a solution-style tsconfig, else `tsc --noEmit -p <pkg>`.
+- The base is never the moving tip of the default branch (no release branch: the merge-base). The hotfix
+  review is named (`/verify-implementation` sweep 1 or `code-reviewer`) with the stub quick-check.
+- `profile-check` validates `tests.*` and `release.*` placeholders per key; `{cmd}` and `{description}`
+  are one shell-quoted word each. `check-skills` skips file names (`release.sh`) under the new roots.
+- `/commit` unstages flagged files on a secret stop; the batch's full run is the release candidate's run
+  when the release branch gets the same head; stale wording aligned (README, testing README, e2e-validate).
+
 ### Switch-over (owner)
 
 Tag `v2.1.0` on the merge into `main`, then `scripts/workflow/release.sh v2.1.0 --apply` once no batch

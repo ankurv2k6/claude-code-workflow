@@ -32,7 +32,7 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
 | End of a lane or standalone module | after the review's fixes: `tiers.lane_end` once, then `commands.test_lane_end` once | the lane |
 | A verify sweep | the quick tier beside its review; its fixes' delta and the callers' tests of shared code it changed; then the lane's `commands.test_lane_end` once, after the fixes | the verifier |
 | Merge into the integration branch | `tiers.merge` through `merge-lane.mjs`, skipped when the verifier ran it green on the lane head that merged; its tests are the delta, `tests.merge_delta`, never a broad selection | the orchestrator |
-| End of a cut, or a release candidate (a hotfix included) | `tiers.cut_end` (invariant gates first; not for a hotfix), the review or combined final, its fixes merged, then `commands.test_full` once (never a tier gate): one full run per release candidate | the orchestrator, or the agent with the hotfix |
+| End of a cut, or a release candidate (a hotfix included) | `tiers.cut_end` (invariant gates first; not for a hotfix), the review or combined final, its fixes merged, then `commands.test_full` once (never a tier gate): one full run per release candidate | the orchestrator, or the session with the hotfix; `release.deploy` only the session the owner spoke to |
 | Routine re-merge between tracks | `tiers.merge` | the orchestrator |
 | Track-merge milestone (a finished cut into the mainline), or before a release | `tiers.track_merge` | the orchestrator |
 
@@ -53,9 +53,9 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
   pair's own lock calls join it. Never two heavy jobs from two owners at once. **Before starting one, tell
   peer sessions** (`SendMessage` to the agents you run, a Checkpoint-log line in the task list). No key: one
   at a time, by hand, after telling peers.
-- **The base is the release or integration branch,** never the default branch: `{base}` is the lane's base,
-  or `docs.release_branch` for a hotfix. Always pass it: a selector without one diffs against its own default
-  (often `main`) and selects the whole drift.
+- **The base is the release or integration branch,** never the moving tip of the default branch (with no
+  release branch, the merge-base): `{base}` is the lane's base, or `docs.release_branch` for a hotfix. Always
+  pass it: a selector without one diffs against its own default (often `main`) and selects the whole drift.
 - **Never auto-escalate.** A selection runs at the tier its command caps. When the selector asks for more,
   report "escalated to `<tier>`, deferred to the release candidate's full run" and run nothing broader, not a
   related-tests run over the changed files either: on shared code it selects most of the tree.
@@ -86,13 +86,16 @@ deploy, not two:
 
 1. **Start:** `release.hotfix_start` (`{hotfix}`). By hand: a worktree and branch `hotfix/<name>` off
    `docs.release_branch`.
-2. **Fix, then review beside the quick tier** (above), base the release branch, and apply the findings.
+2. **Fix, then review beside the quick tier** (above), base the release branch: the review is
+   `/verify-implementation` sweep 1 or a `code-reviewer` agent on the diff, plus the stub quick-check
+   (`/implement-plan` Step 4b) on the changed files. Apply the findings.
 3. **The release verification:** one heavy-lock hold, the rehearsal and `commands.test_full` side by side
    in it, known reds subtracted; start `release.package` (`{bundle}`) beside it, not after it.
 4. **Green:** `release.hotfix_finish` merges into the release branch (`tests.merge_delta` at that merge;
    the release branch moved since the start: package again from the merged head).
 5. **Deploy:** `release.deploy` (`{bundle}`, `{description}`) at the safe window, only with the owner's
-   approval of this deploy (`_shared-commit-protocol.md`), then back-merge the release branch into the
+   approval of this deploy (`_shared-commit-protocol.md`), run by the session the owner spoke to, never by
+   an agent a command launched; then back-merge the release branch into the
    integration branch, with `tests.merge_delta`.
 
 ## If MAPPED (no profile, v1): run the selector, not the suite
@@ -156,7 +159,7 @@ selector and map checker must do, and the traps they must handle) and a skeleton
 
 ```bash
 npm test 2>/dev/null || npx vitest run
-npx tsc --build      # a root `tsc --noEmit` over a solution-style tsconfig ("files": [] + references) checks nothing
+npx tsc --noEmit -p <pkg>   # or tsc --build for a solution-style tsconfig ("files": [] + references), where --noEmit checks nothing
 npm run lint 2>/dev/null || npx eslint .
 ```
 

@@ -323,12 +323,12 @@ standing rules word for word.
 |------|---------|
 | `_shared-autonomous.md` | No pauses; decide, don't ask; the standing delivery rules; the universal guardrails, plus the project's `## Hard guardrails` |
 | `_shared-triage.md` | What blocks, the 2-sweep cap, the deferred log, how an independent verifier works |
-| `_shared-test-selection.md` | Which tests run when, and who runs them. Lanes defer escalated tiers; one full run per batch. Test hygiene |
+| `_shared-test-selection.md` | Which tests run when, and who runs them. Review beside the quick tier, then one wide run; no escalated tier is ever run; one heavy job per machine; known reds subtracted; one full run per release candidate; the hotfix path. Test hygiene |
 | `_shared-ui-parity.md` | Real-browser screenshot pairs of mockup and app, state by state |
 | `_shared-agent-tracking.md` | Briefs on disk, the Agents table, resuming an agent after an interrupted session |
 | `_shared-effort-budget.md` | Effort, form and report size per agent role; delegation and token rules |
 | `_shared-agent-timeout.md` | Completion by notification, stall detection, graceful degradation |
-| `_shared-commit-protocol.md` | Commit format, session attribution, gates from CLAUDE.md, push policy |
+| `_shared-commit-protocol.md` | Commit format, session attribution, gates on the staged diff (profile or CLAUDE.md), push policy, deploy approval |
 | `_shared-project-profile.md` | The project profile: keys, defaults and v1 fallback, gate registry and tiers, where a lesson belongs, apply by risk, provenance |
 
 Run `node scripts/check-skills.mjs` after editing any command. It fails on retired phrases, broken
@@ -481,10 +481,10 @@ Useful when a plan file has grown to 3,000+ lines from iterative `/analyze-plan`
 | `/commit` | Stage all changes, run security scans (gitleaks, secret patterns), TypeScript/ESLint/Prettier checks and the test-map check, generate a conventional commit message, commit, and push a feature branch. The default branch or a deploying branch is pushed only with `--push`. | `[message]`<br>`--no-push`<br>`--push`<br>`--amend` | Git commit with conventional message |
 
 **Pre-commit checks (BLOCKING)**:
-- Gitleaks secret scan
+- Gitleaks secret scan of the staged diff (`gitleaks protect --staged`)
 - Manual secret pattern scan
 - Sensitive file check (`.env`, `.pem`, credentials, etc.)
-- TypeScript type check (`npx tsc --noEmit`)
+- TypeScript type check (the profile's typecheck; else `tsc --build` for a solution-style tsconfig, `tsc --noEmit -p <pkg>` otherwise)
 - ESLint with `--max-warnings=0`
 - Prettier format check
 - **Does NOT run**: tests (those belong in CI/CD)
