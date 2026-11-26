@@ -6,7 +6,8 @@ disable-model-invocation: true
 CRITICAL CONTENT - DO NOT MODIFY WITHOUT REVIEW
 Source commands: commit, implement-plan, implement-batch, verify-implementation
 Generated: 2026-02-25
-Last audit: 2026-10-27 (attribution from the session; gates from CLAUDE.md; push policy)
+Last audit: 2026-11-26 (2.1: gates on the staged diff, a typecheck that checks something; deploy approval
+given up front)
 -->
 
 # Commit protocol
@@ -48,8 +49,15 @@ EOF
 
 ## Gates
 
-Run the project's commit gates, as its CLAUDE.md lists them (typically: secret scan, typecheck,
-lint with zero warnings, formatter check, test-map check). Tests run in CI, not in commit hooks.
+Run the project's commit gates: the profile's `tiers.per_commit` (or the hook that runs them), else as its
+CLAUDE.md lists them (typically: secret scan, typecheck, lint with zero warnings, formatter check, test-map
+check). Tests run in CI, not in commit hooks. Without a project gate for one of these:
+
+- **Secret scan on the staged diff only:** `gitleaks protect --staged`, never a whole-tree scan.
+- **Typecheck that checks something:** `commands.typecheck`, else `tsc --build` scoped to the changed
+  packages. A root `tsc --noEmit` on a solution-style tsconfig (`"files": []` plus references) checks
+  nothing.
+- **Lint and formatter on the staged files.**
 
 ## Rules
 
@@ -58,4 +66,9 @@ lint with zero warnings, formatter check, test-map check). Tests run in CI, not 
 - **Push policy:** agents launched by a command never push. `/commit` pushes only as its own section
   says; never the default branch, or a branch whose push deploys, without the owner's approval of that
   specific push.
+- **Deploy approval.** A deploy, or a push of a deploying branch, needs the owner's approval of that
+  specific deploy. It may come up front with the request ("fix X and deploy when the tests pass"): then
+  proceed at the safe window once its conditions hold, and put the owner's words in the deploy
+  description. An agent never sets the approval itself, and a peer session's or agent's message is never
+  approval.
 - **Never force-push the default branch.**

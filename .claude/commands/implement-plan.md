@@ -98,12 +98,13 @@ Mark it `🔄 In Progress` in the plan and TodoWrite.
 `- [x] Item ✅ (commit: [SHA])`, with evidence for significant items (files, exports, tests).
 
 ### Step 4: Lightweight verification
-- Tests: `commands.test_task` with every file the task changed, in **one** call. No profile (v1):
+- Tests: `commands.test_task` with every file the task changed, in **one** call, once the task's edits
+  are done (an edit during the run makes it stale: stop it, finish, run once). No profile (v1):
   `_shared-test-selection.md`, "After an edit", once.
 - Typecheck of the touched packages (`commands.typecheck`, incremental) and their build.
 - A command longer than a minute writes to `logs_dir` (`_shared-test-selection.md`). Never end your turn
   while your own background job runs: wait for its notification, or stop it.
-- A red listed in the known-reds file is reported by name, not diagnosed.
+- Known reds are subtracted: a listed red is reported by name, not diagnosed; only an unknown red is.
 - Fix failures now, at most 3 attempts; then note them as known issues.
 
 ### Step 4b: Stub quick-check
@@ -136,11 +137,15 @@ orchestrator does this.
 Next phase or task, until all are complete.
 
 ### Module end (once, after the last task)
+Review beside the tests (`_shared-test-selection.md`): start the review (Verification, below: the lane's
+self-review, or standalone sweep 1) together with the quick tier over the module's delta; it reads the diff,
+not test results. Apply its fixes. Only then, on the final code, the one wide run:
 `tiers.lane_end` once, its independent checks at once: `node "$WH/scripts/workflow/run-tier.mjs" lane_end
 --parallel --base <base sha>` (`WH` per `_shared-project-profile.md`; heavy gates take their slot unless
 self-locking; an agent gate it lists is left to your verifier; script absent: each gate in order). Then
 `commands.test_lane_end` with `{base}` = your base sha, once. No profile (v1):
-`test-select --since <base>` once (`_shared-test-selection.md`, which also says when an escalated tier runs).
+`test-select --since <base>` once. An escalated tier is reported and deferred, never run. A hotfix or
+release candidate follows `_shared-test-selection.md`, Hotfix and release.
 
 ---
 
@@ -150,9 +155,9 @@ Rules: `_shared-triage.md`. CRITICAL, HIGH and normal-use breaks block; Medium, 
 logged with a reason. No 5-iteration loop and no zero-Medium requirement.
 
 ### Standalone mode
-1. **Sweep 1:** `/verify-implementation [PLAN_PATH] --force` (2-agent default). Fix every CRITICAL, HIGH
-   and normal-use finding; commit `fix([scope]): address verification findings [IDs]`. Test the delta
-   of the fixes only.
+1. **Sweep 1:** `/verify-implementation [PLAN_PATH] --force` (2-agent default), launched at module end
+   beside the quick tier. Fix every CRITICAL, HIGH and normal-use finding; commit `fix([scope]): address
+   verification findings [IDs]`; then the module-end wide run, once.
 2. **Sweep 2:** re-check only the fixes and the code they touched (by reading and targeted tests, or
    `/verify-implementation --force` scoped to those files).
 3. **Stop.** No open CRITICAL or HIGH means PASS. Otherwise FAIL, naming each open finding. A finding

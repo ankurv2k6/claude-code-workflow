@@ -29,14 +29,16 @@ git log --oneline -5
 
 ### Step 2: Security & Integrity Checks
 
-Run these checks **before staging**. STOP and report if any fail.
+Stage first (`git add -A`), then run these checks **on the staged diff, before committing**; the profile's
+`tiers.per_commit`, or the project's hook, replaces those it covers. STOP and report if any fail (the files
+stay staged; nothing is committed).
 
 #### 2a. Gitleaks Secret Scan (Required)
 
 ```bash
-# Check if gitleaks is installed
+# The staged diff only, never a whole-tree scan
 if command -v gitleaks &> /dev/null; then
-  gitleaks detect --source . --verbose --no-git
+  gitleaks protect --staged --verbose
 else
   echo "⚠️ gitleaks not installed. Install with: brew install gitleaks"
   # Fallback to manual pattern scan
@@ -100,9 +102,16 @@ git diff --cached | grep -E \
 Run type checking and linting on changed files. **STOP if errors found**.
 
 ```bash
-# TypeScript type check (if tsconfig.json exists)
+# TypeScript: the profile's commands.typecheck when set; else tsc --build on the changed packages.
+# A root `tsc --noEmit` on a solution-style tsconfig ("files": [] + references) checks nothing.
 if [ -f "tsconfig.json" ]; then
-  npx tsc --noEmit
+  tc=$(jq -r '.commands.typecheck // empty' .claude/workflow-profile.json 2>/dev/null)
+  if [ -n "$tc" ]; then eval "$tc"
+  else
+    pkgs=$(git diff --cached --name-only | while read -r f; do d=$(dirname "$f")
+      while [ "$d" != . ] && [ ! -f "$d/tsconfig.json" ]; do d=$(dirname "$d"); done; echo "$d"; done | sort -u)
+    npx tsc --build $pkgs
+  fi
 fi
 
 # ESLint (if .eslintrc* or eslint.config.* exists)
@@ -155,12 +164,9 @@ See `_shared-commit-protocol.md` for format (Conventional Commits), types, HERED
 - **Scopes**: the module ID being committed (e.g. `m16`) or a package/app name (e.g. `campaigns`, `api`, `web`, `db`)
 - **Attribution**: use the attribution lines the session supplies (`_shared-commit-protocol.md`). The "Generated with Claude Code" line belongs in pull-request descriptions, not commit messages, unless the session says otherwise.
 
-### Step 4: Stage & Commit
+### Step 4: Commit
 
-```bash
-git add -A
-```
-Use HEREDOC pattern from `_shared-commit-protocol.md`, ending with the session's attribution lines.
+The changes were staged in Step 2. Use HEREDOC pattern from `_shared-commit-protocol.md`, ending with the session's attribution lines.
 
 ### Step 5: Push (push policy)
 
@@ -245,6 +251,7 @@ If rejected: `git fetch && git rebase origin/<branch>` then retry. Never force-p
 
 ## Version History
 
+- **2026-11-26**: Stage first, then gates on the staged diff (`gitleaks protect --staged`, a scoped `tsc --build` or the profile's typecheck)
 - **2026-10-27**: Push policy (deploying branches need `--push`); attribution from the session; test-map check
 - **2026-02-23**: Added gitleaks, secret scanning, TypeScript/ESLint/Prettier checks; explicit no-tests policy
 - **2026-01-22**: Condensed for context efficiency

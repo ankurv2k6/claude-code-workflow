@@ -75,7 +75,9 @@ One table in the task list (or the module's report when run standalone):
   - **the risks the lane did not test**, rather than re-proving what its tests already cover.
 - **Regression guard.** A fix to shared code (a file other modules import) runs its callers' tests too,
   not only the fix's own.
-- **Re-run the lane's selection once** (`_shared-test-selection.md`), then only the delta of your fixes.
+- **Review beside the quick tier, then one wide run** (`_shared-test-selection.md`): read the diff while the
+  quick tier runs, apply your fixes, then re-run the lane's selection once, on the final code. Known reds are
+  subtracted; only an unknown red is a finding.
 - **Run the code as well as reading it.** Reading finds security and contract defects; only running
   finds the rest:
   - UI through `_shared-ui-parity.md`, the one parity pass;

@@ -32,8 +32,9 @@ Spend effort on the risks the lane did not test, not on re-proving what its test
 ## Rules
 
 - Fix only CRITICAL, HIGH and normal-use breaks; log the rest with a reason. At most 2 sweeps.
-- Tests: the lane's `commands.test_lane_end` once; then the delta of your fixes; a fix to shared code also
-  runs its callers' tests. Nothing broader.
+- Tests: review the diff while the quick tier (`commands.test_task` on the delta) runs; apply your fixes;
+  then the lane's `commands.test_lane_end` once, on the final code (a file edited during it: stop it, finish,
+  run once). A fix to shared code also runs its callers' tests. Known reds are subtracted. Nothing broader.
 - Commit fixes as `fix(<module>): …` through the gates.
 
 ## Last: merge prep

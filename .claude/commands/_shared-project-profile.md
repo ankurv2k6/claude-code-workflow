@@ -7,7 +7,7 @@ CRITICAL CONTENT - DO NOT MODIFY WITHOUT REVIEW
 Source commands: implement-batch, implement-plan (--lane), verify-implementation, blueprint, workflow-sync,
 _shared-test-selection, _shared-effort-budget, _shared-triage
 Generated: 2026-11-25 (workflow v2: project facts had been hard-coded into briefs and copied between cuts)
-Last audit: 2026-11-25
+Last audit: 2026-11-26 (2.1: tests.* heavy lock and merge delta, release.* hotfix path)
 -->
 
 # Project profile
@@ -51,7 +51,9 @@ is prose, never a gate or a job). Only `version`, `project` and `updated` are re
 | `merge.*` | `renumber` (puts colliding migrations after the integration head's; `{base}`), `check` (verifies the journal) | renumber and check by hand, as the merge step says |
 | `test_db.*` | `host`, `port`, `container`, `name_pattern`, `create`, `bootstrap`, `url`, `allow_hosts` | CLAUDE.md and the briefs, as in v1; `url`: `postgresql://{host}:{port}/{name}` |
 | `ports.*` | `range` [low, high], the `registry` file, `names` (a lane's port names), `step`, `offsets` (name → offset) | ports from the briefs, as in v1; `names` `["api"]`, `step` 1, no offsets |
-| `known_reds` | file of reds that predate the cut | none: every red is new |
+| `known_reds` | file of reds that predate the cut; every run subtracts it (`_shared-test-selection.md`) | none: every red is new |
+| `tests.*` | `heavy_lock` (wraps a heavy job in the one-per-machine lock; `{owner}`, `{cmd}`), `heavy_lock_token` (the env var a held lock exports, so a nested call joins the hold), `merge_delta` (the test run at a merge; `{ours}`, `{theirs}`) | no machine lock: heavy jobs one at a time by hand, peers told first; a merge runs `tiers.merge` only |
+| `release.*` | `hotfix_start` (`{hotfix}`), `hotfix_finish` (`{hotfix}`, `{release_branch}`; the back-merge follows the deploy), `package` (`{bundle}`), `deploy` (`{bundle}`, `{description}`); never smoke-run | the hotfix path by hand with git; package and deploy as the project's deploy doc says |
 | `logs_dir` | where long commands write their output | `logs` |
 | `agents.*` | `max_concurrent`, `verifier_model`, `overrides` (role → model) | 5 · `opus` · none |
 | `limits.*` | `context_budget_tokens`, `handback_lines`, `stall_minutes` | 200000 · 30 · 45 |
@@ -90,6 +92,9 @@ stage, the 30-line hand-back, the context budget, the watchdog) apply with or wi
 | `{url}` | the test DB URL: the `test_db.url` template with `{host}`, `{port}` and `{name}` filled |
 | `{port}` | the lane's first named port, allocated from `ports.range` and recorded in `ports.registry` |
 | `{lane}` · `{set}` | the lane id and the set name, lower case |
+| `{owner}` · `{cmd}` | `tests.heavy_lock`: a label peers see (`<set>-<lane>-full`, `hotfix-<name>-release`) and the heavy command |
+| `{ours}` · `{theirs}` | `tests.merge_delta`: the target head before the merge and the head merged in |
+| `{hotfix}` · `{release_branch}` · `{bundle}` · `{description}` | `release.*`: the hotfix name, `docs.release_branch`, the bundle path, the deploy description |
 
 A command with an unfilled placeholder is not run. A test DB host outside `test_db.allow_hosts` is
 refused.

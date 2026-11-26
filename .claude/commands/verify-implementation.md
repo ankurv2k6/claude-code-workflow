@@ -66,7 +66,7 @@ sweep 1; sweep 2 re-checks only the fixes (Phase 6).
 
 6. **The risk focus** (`_shared-triage.md`):
    - **the delta:** `git diff --name-only <base>...HEAD` (base: the lane's base, or the plan's start
-     commit), plus **its callers**: the files that import or call what changed;
+     commit; for a hotfix the release branch; never the default branch), plus **its callers**: the files that import or call what changed;
    - **the focus list:** each `risk_routing` route whose `paths` match a changed file adds its `reason`,
      and its `verifier` as the agent type for the checklist it covers. No profile (v1): the module's
      invariants, its screens with the most states, new routes and new cross-package dependencies.
@@ -128,8 +128,11 @@ Checklist 5 applies only if `design/wireframes/` or `design/mockups/` exist.
   (`_shared-ui-parity.md`, the one parity pass), calls each external network path once against a real local
   socket, and sends one real request per route access class. **Check a claim by running it before
   reporting it.**
-- **Tests:** the lane's or module's lane-end selection once (`commands.test_lane_end`; no profile (v1):
-  `test-select --since <base>`), then only what a finding needs.
+- **Tests: review beside the quick tier** (`_shared-test-selection.md`). A reads the diff and never waits
+  for test results; B runs the quick tier on the delta (`commands.test_task`) at the same time, then only
+  what a finding needs. The wide run (the lane-end selection, `commands.test_lane_end`; no profile (v1):
+  `test-select --since <base>`) runs **once, in Phase 6, after the fixes are in**, never before. Known reds
+  are subtracted: only an unknown red is a finding.
 - **Gates:** a gate this run executes (a tier the brief names, `tiers.merge` at a batch verifier's merge
   prep, a gate the plan's §7A names) goes through `run-tier.mjs` or is run as the registry gives it. **An
   agent gate (`kind: agent`) is launched, not run:** its `verifier` agent type, with `asks` as the task and
@@ -305,10 +308,9 @@ VERDICT: [READY FOR PR / NOT READY / INCOMPLETE - MANUAL REVIEW REQUIRED]
 ### Regression guard and validation
 - **A fix to shared code** (a file other modules import) runs its callers' tests too.
 - Tests: `commands.test_task` with the files the fixes changed, in one call. No profile (v1): the selection
-  for those files (`_shared-test-selection.md`); inside a batch, an escalated tier is deferred, not run;
-  standalone, it runs once, here, not per fix.
-- Typecheck (`commands.typecheck`; no profile (v1): `npx tsc --noEmit`) and build. At most 3 attempts per
-  failure.
+  for those files (`_shared-test-selection.md`); an escalated tier is reported and deferred, never run.
+- Typecheck (`commands.typecheck`; no profile (v1): `tsc --build` on the changed packages, never a root
+  `tsc --noEmit` over a solution-style tsconfig) and build. At most 3 attempts per failure.
 
 `REMEDIATION: CRITICAL X/X | HIGH X/Y (Z deferred) | MEDIUM logged | LOW logged | INFO X | BLOCKED Z`
 
@@ -316,7 +318,8 @@ VERDICT: [READY FOR PR / NOT READY / INCOMPLETE - MANUAL REVIEW REQUIRED]
 
 ## Phase 6: Sweep 2 and commit
 
-1. **Sweep 2 re-checks the fixes only:** each fix in place, the code it touched, and the delta's tests. No
+1. **Sweep 2 re-checks the fixes only:** each fix in place and the code it touched; then the one wide run
+   on the final code (the lane-end selection; a file edited during it: stop it, finish, run once). No
    re-audit. A CRITICAL or HIGH still open is reported open (the module's verification FAILS); a finding
    seen in both sweeps is logged as architectural. **There is no sweep 3.**
 2. **Blueprint mode:** stage gate status, regression history, deviation log, contract compliance, frozen

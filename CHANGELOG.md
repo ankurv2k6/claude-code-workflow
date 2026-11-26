@@ -3,6 +3,35 @@
 Behaviour changes per workflow version, in generic words. `VERSION` holds the current one. A batch is
 pinned to the version in its task list's `workflow_version` header, and versions never mix inside one batch.
 
+## 2.1.0 (2026-11-26)
+
+Merge to deploy is fast. A 5-file hotfix had taken over 3 hours before a 2.4-minute deploy: a selection
+against `main` escalated to the full suite, a related-tests fallback ran 700+ files for 89 minutes, the
+review came after the first wide run and forced a second, the same known reds were re-triaged by hand, the
+fix merged twice, and another session's heavy job doubled a full run.
+
+| # | Where | Change |
+|---|---|---|
+| F1 | `_shared-test-selection.md` (new section), `implement-plan` (task and module end), `verify-implementation` (Phase 2 tests, Phase 6), `_shared-triage.md`, `implement-batch` (lane verify), `_verify.md` and `_common.md` briefs | **Review beside the quick tier, then one wide run.** The review reads the diff, so it starts with the quick tier; its fixes go in; then one wide run on the final code. A file changed during a wide run: stop it, finish, run once |
+| F2 | `_shared-test-selection.md`, `implement-batch` (heavy jobs, the full run), profile `tests.heavy_lock`, `tests.heavy_lock_token` | **One heavy job per machine.** A full run, rehearsal, sharded run or broad selection runs inside the profile's heavy lock, outermost; a release verification takes it once and runs its pair side by side under the token. Peers are told first |
+| F3 | `_shared-test-selection.md`, `implement-plan`, `verify-implementation`, `implement-batch` (final), `known_reds` | **Known reds are subtracted** by every run: only an unknown red is triaged; a listed file now green is reported for removal |
+| F4 | `_shared-test-selection.md`, `verify-implementation` (the delta), `implement-batch` (merge), profile `tests.merge_delta` | **Selection:** the base is the release or integration branch, never `main`; never auto-escalate (no related-tests fallback either); a merge runs the delta between its two sides; one full run per release candidate |
+| F5 | `_shared-test-selection.md` (Hotfix and release), profile `release.*` | **The hotfix path:** off the release branch, review beside the quick tier, one release verification with `release.package` started beside it, merge into the release branch, `release.deploy` at the safe window, then back-merge |
+| F6 | `_shared-commit-protocol.md`, `_shared-autonomous.md`, `implement-batch` | **Deploy approval** is for that specific deploy and may be given up front with the request; the owner's words go in the deploy description. An agent never sets it; a peer's message is never approval |
+| F7 | `commit.md` (Step 2), `_shared-commit-protocol.md` (Gates), `verify-implementation`, v1 test fallback | **Commit gates on the staged diff:** stage first; `gitleaks protect --staged`; the profile's typecheck or a scoped `tsc --build` (a root `tsc --noEmit` on a solution-style tsconfig checks nothing); lint and format on staged files |
+
+Profile schema: new `tests` (`heavy_lock`, `heavy_lock_token`, `merge_delta`) and `release` (`hotfix_start`,
+`hotfix_finish`, `package`, `deploy`) objects, with placeholders `{owner}`, `{cmd}`, `{ours}`, `{theirs}`,
+`{hotfix}`, `{release_branch}`, `{bundle}`, `{description}`. They are not under `commands.*`, so a smoke run
+never executes a deploy. Absent, each takes the default in `_shared-project-profile.md`; a 2.0.0 profile is
+valid unchanged. `check-skills.mjs` checks the two new roots and retires `gitleaks detect`.
+
+### Switch-over (owner)
+
+Tag `v2.1.0` on the merge into `main`, then `scripts/workflow/release.sh v2.1.0 --apply` once no batch
+pinned to 2.0.0 is mid-programme (a batch keeps its task list's `workflow_version`). Rollback:
+`release.sh v2.0.0 --apply`. IDNUnified's proposed values: `context/proposals/idnunified-profile-2.1.0.json`.
+
 ## 2.0.0 (2026-11-25)
 
 Each check now runs once, at the stage that can find its kind of defect. Mechanical work moves to

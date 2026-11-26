@@ -57,6 +57,7 @@ const RETIRED = [
   ['1,000+ tool calls', 'size lanes by the context budget (_shared-effort-budget.md)'],
   ['`.lane/report.md`', 'the lane report goes in the final reply under fixed headings'],
   ['Lanes of 3–6 hours', 'size lanes by the context budget, not by hours'],
+  ['gitleaks detect', 'scans the whole tree; scan the staged diff with `gitleaks protect --staged`'],
 ];
 
 /** A sentence that forbids the phrase is not a use of it. */
@@ -73,7 +74,7 @@ const retiredUses = (text, phrase) =>
 /** Profile keys a command may name, checked against the schema. */
 const PROFILE_ROOTS = [
   'commands', 'tiers', 'gates', 'risk_routing', 'heavy_jobs', 'test_db', 'limits', 'agents', 'ports',
-  'known_reds', 'logs_dir', 'invariant_suites',
+  'known_reds', 'logs_dir', 'invariant_suites', 'tests', 'release',
 ];
 const PROFILE_KEY = new RegExp(`^\\.?(${PROFILE_ROOTS.join('|')})((?:\\.[\\w*-]+)*)$`);
 const schema = existsSync(SCHEMA) ? JSON.parse(readFileSync(SCHEMA, 'utf8')) : null;

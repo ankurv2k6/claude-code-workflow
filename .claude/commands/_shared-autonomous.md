@@ -46,8 +46,9 @@ Apply these, and copy them word for word into every agent brief:
 
 These hold in every project:
 
-- **No push of the default branch, or of any branch whose push deploys, without the owner's approval of
-  that specific push.** Agents launched by a command never push.
+- **No push of the default branch, or of any branch whose push deploys, and no deploy, without the
+  owner's approval of that specific push or deploy** (it may be given up front with the request;
+  `_shared-commit-protocol.md`). Agents launched by a command never push.
 - **Never `--no-verify`.** Never force-push the default branch.
 - **Never `pkill`, `killall` or kill by process name.** Stop only PIDs you started.
 - **Work only in your own worktree, databases and ports.**

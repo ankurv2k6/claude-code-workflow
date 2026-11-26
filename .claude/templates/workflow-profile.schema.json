@@ -184,7 +184,39 @@
         "notes": { "type": "string" }
       }
     },
-    "known_reds": { "type": "string", "description": "File listing reds that predate the cut." },
+    "known_reds": { "type": "string", "description": "File listing reds that predate the cut. Every run subtracts it: only a red missing from it is triaged; a listed file now green is reported for removal." },
+    "tests": {
+      "type": "object",
+      "description": "Machine-wide heavy-job lock and the merge delta selection (_shared-test-selection.md). Never smoke-run.",
+      "additionalProperties": false,
+      "properties": {
+        "heavy_lock": {
+          "type": "string",
+          "description": "Wraps a heavy job (full run, rehearsal, sharded run, broad selection) in the one-per-machine lock. Placeholders {owner} (a label peers see) and {cmd} (the job)."
+        },
+        "heavy_lock_token": {
+          "type": "string",
+          "description": "The environment variable a held lock exports; a heavy_lock call that carries it joins the hold instead of waiting (a release verification's pair)."
+        },
+        "merge_delta": {
+          "type": "string",
+          "description": "The test run at a merge: the delta between the two sides. Placeholders {ours} (the target head before the merge) and {theirs} (the merged-in head)."
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "description": "The hotfix path and the release (_shared-test-selection.md, Hotfix and release). Never smoke-run; release.deploy needs the owner's approval of that deploy (_shared-commit-protocol.md).",
+      "additionalProperties": false,
+      "properties": {
+        "hotfix_start": { "type": "string", "description": "Creates a hotfix worktree and branch off docs.release_branch. Placeholder {hotfix} (its name)." },
+        "hotfix_finish": { "type": "string", "description": "Merges the hotfix into the release branch ({release_branch}); the back-merge into the integration branch follows the deploy. Placeholder {hotfix}." },
+        "package": { "type": "string", "description": "Builds the deploy bundle without deploying; started while the wide run runs. Placeholder {bundle} (the output path)." },
+        "deploy": { "type": "string", "description": "Deploys a packaged bundle at the next safe window. Placeholders {bundle}, {description} (carries the owner's approval words)." },
+        "notes": { "type": "string" }
+      }
+    },
     "logs_dir": { "type": "string" },
     "agents": {
       "type": "object",
