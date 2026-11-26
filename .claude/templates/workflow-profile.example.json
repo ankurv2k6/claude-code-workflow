@@ -105,6 +105,17 @@
     "notes": "A lane gets api at a base port (4400, 4410, …) and web at base + 2000."
   },
   "known_reds": "context/testing/known-reds.md",
+  "tests": {
+    "heavy_lock": "scripts/heavy-lock.sh run --owner {owner} -- {cmd}",
+    "heavy_lock_token": "HEAVY_LOCK_TOKEN",
+    "merge_delta": "node scripts/test-select.mjs --merge {ours} {theirs} --max-tier quick --run"
+  },
+  "release": {
+    "hotfix_start": "scripts/hotfix-worktree.sh start {hotfix}",
+    "hotfix_finish": "scripts/hotfix-worktree.sh finish {hotfix} --into {release_branch}",
+    "package": "scripts/deploy.sh --dry-run --out {bundle}",
+    "deploy": "scripts/deploy.sh --bundle {bundle} --when-safe --description {description}"
+  },
   "logs_dir": "logs",
   "agents": { "max_concurrent": 6, "verifier_model": "opus", "overrides": {"doc-writer": "sonnet"} },
   "limits": { "context_budget_tokens": 200000, "handback_lines": 30, "stall_minutes": 45 },

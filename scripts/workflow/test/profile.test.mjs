@@ -245,3 +245,18 @@ test('profile: test_db.url renders {url} with credentials; it must name {host} a
   p.ports.offsets = { web: 2000 };
   assert.deepEqual(checkProfile(p, schema()), []);
 });
+
+test('profile-check: tests.* and release.* placeholders are checked per key', () => {
+  const p = example();
+  assert.deepEqual(checkProfile(p, schema()), []);
+  p.tests.heavy_lock = 'lock --owner {owner} -- {cmd} {files}'; // {files} is not a heavy_lock placeholder
+  p.release.deploy = 'deploy --bundle {bundle} --description {description} --who {owner}';
+  p.release.package = "pack --out '{bundle}'"; // quoted
+  p.commands.test_task = 'run {cmd}'; // a release/tests placeholder in commands.*
+  const errs = checkProfile(p, schema()).join('\n');
+  assert.match(errs, /\$\.tests\.heavy_lock: unknown placeholder \{files\} \(known: owner, cmd\)/);
+  assert.match(errs, /\$\.release\.deploy: unknown placeholder \{owner\}/);
+  assert.match(errs, /\$\.release\.package: placeholder \{bundle\} is inside quotes/);
+  assert.match(errs, /\$\.commands\.test_task: unknown placeholder \{cmd\}/);
+  assert.doesNotMatch(errs, /release\.hotfix_finish|tests\.merge_delta/);
+});

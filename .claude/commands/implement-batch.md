@@ -37,7 +37,8 @@ specs committed → Phase 0 (profile · scaffold · known reds · contracts + st
 Execute automatically without permission. Use TodoWrite throughout.
 
 **Owner questions only at two fixed points:** after the plan (before Phase 0 starts, when the owner has
-not already approved it) and before a deploy or a push of a deploying branch. Everywhere else take the
+not already approved it) and before a deploy or a push of a deploying branch (unless the owner approved
+that deploy up front with the request, `_shared-commit-protocol.md`). Everywhere else take the
 documented default, record it in the Decision log, and add an Owner item; never stop to ask.
 
 ## Shared protocols — read before Phase 0
@@ -248,7 +249,9 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
 - **The watchdog's exit wakes you:** on a stall, message the agent first, then resume or relaunch; restart
   the watchdog.
 - **Heavy jobs take a slot** (`heavy_jobs`, through `slot.sh`; `_shared-test-selection.md`), yours included,
-  except a job marked `self_locking`, which takes its own lock and is never wrapped in `slot.sh`.
+  except a job marked `self_locking`, which takes its own lock and is never wrapped in `slot.sh`. With
+  `tests.heavy_lock` set, each heavy job also runs inside the machine's one heavy lock, outermost, after you
+  tell peer sessions; never two heavy jobs from two owners at once.
 - **Orchestrator restart:** at each milestone (Phase 0 done, after each merge wave), write a restart note
   in the Checkpoint log (what is running, what is next, the open Owner items). When your context has
   passed `limits.context_budget_tokens`, end the session after that note; the next session resumes with
@@ -271,7 +274,8 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
    **The contracts lane (C0) always gets a specialist verifier** when the profile has `risk_routing`: the
    route types whose paths its contracts serve, even when no changed file matches, plus the `reach-walk`
    gate's output when the registry has one.
-   Prompt:
+   It reviews beside the quick tier and runs the lane's wide selection and `tiers.merge` once, after its
+   fixes (`_shared-triage.md`). Prompt:
    read `context/batch-briefs/_verify.md`; the lane's hand-back, as claims to check rather than trust; the
    focus list. Record the verifier's Agents row in the same turn.
 
@@ -291,7 +295,9 @@ Once the first lane runs, start the watchdog (`_shared-agent-timeout.md`).
    lane head is the verifier's green sha and already contains the integration head** (the verifier ran the
    tier on exactly what merged); otherwise the tier runs once. Exit 1: a red (the merge commit stays: fix
    forward or revert it). Exit 2: a conflict, listed and aborted, never resolved by the script: resolve by
-   hand (below). An agent gate it lists is launched as `_shared-project-profile.md` says.
+   hand (below). An agent gate it lists is launched as `_shared-project-profile.md` says. When the profile
+   sets `tests.merge_delta`, run it once after the script (`{ours}` the integration head before the merge,
+   `{theirs}` the lane head), skipped under the same rule; a merge never runs a broad selection.
 2. **By hand** (script absent, or after exit 2): `git merge --no-ff <lane branch>` (its Agents row;
    `feat/<set>-<lane>`) into the integration branch, then resolve:
    - Lockfile: re-run the install, then check with the frozen-lockfile flag. Never hand-edit a lockfile.
@@ -356,7 +362,8 @@ Fix CRITICAL and HIGH only (`_shared-triage.md`), and **merge the fixes before s
 
 ### 3. The one full run
 Only now, on the merged head that holds the final's fixes: build, then `commands.test_full` once (through
-its slot when heavy). No profile (v1): `test-select --tier full` (every runner), plus e2e once with the
+its slot when heavy, inside `tests.heavy_lock` when set, peers told first; a release rehearsal on the same
+head runs beside it in that one hold). No profile (v1): `test-select --tier full` (every runner), plus e2e once with the
 project's fakes for identity, mail and third-party services. This is the only whole-suite run of the batch;
 a red goes to step 4, never to a second full run.
 
@@ -367,7 +374,8 @@ a fix:
 2. It re-runs only the failed files plus the selection for its own fixes.
 3. It merges last, with its migrations renumbered after every lane's.
 
-A known or pre-existing red is listed by name with an Owner item, not fixed here.
+A known or pre-existing red is listed by name with an Owner item, not fixed here; a listed file that now
+passes is reported for removal from the known-reds file.
 
 ### 5. Batch result
 **✅ BATCH PASS** when every module is merged, its verify has no open CRITICAL or HIGH, the cut-end checks
@@ -408,7 +416,8 @@ applies nothing. Command absent (v1 install): write at most 5 lines of durable l
 
 ### Next steps
 - **PASS:** the integration branch is ready for review. Pushing or opening a PR follows the push policy:
-  never a deploying branch, and never a deploy, without the owner's approval of that specific push.
+  never a deploying branch, and never a deploy, without the owner's approval of that specific push (it may
+  be given up front). Shipping, and any hotfix after it: `_shared-test-selection.md`, Hotfix and release.
 - **FAIL:** fix the named modules (`/implement-plan <blueprint> --lane` in their worktree), then
   `/implement-batch --resume`.
 

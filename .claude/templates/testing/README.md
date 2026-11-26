@@ -24,8 +24,8 @@ Document the bootstrap, the runner commands and the traps in `context/testing/TE
 - **edges:** tests that read a file without importing it (fixtures, manifests, stylesheets, a directory
   walk). The import graph cannot see them, so the map must.
 - **escalations:** changes that make narrow selection dishonest (a lockfile, a test config, a shared
-  contract or stylesheet) and the tier they raise to. Inside a lane an escalation is recorded and
-  deferred, not run.
+  contract or stylesheet) and the tier they raise to. An escalation is recorded and deferred, never run;
+  the release candidate's one full run covers it.
 - **tiers:** `quick` (related tests of the changed files), `standard` (whole affected groups plus their
   dependents), `full` (every runner).
 

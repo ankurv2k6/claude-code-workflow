@@ -324,7 +324,7 @@ If `--skip-execution`, output the implementation summary and EXIT. Do not procee
 
 ### 4.1 Pre-Execution Checks
 
-1. **TypeScript compilation**: Run `npx tsc --noEmit` on the test files to catch type errors
+1. **TypeScript compilation**: Run the profile's `commands.typecheck`, else `npx tsc --noEmit -p <pkg>` for the test files' package (`tsc --build` for a solution-style tsconfig, where a root `--noEmit` checks nothing)
 2. **Import resolution**: Verify all imports resolve (no missing modules)
 3. **Fixture availability**: Confirm any required fixtures/servers/configs exist
 
@@ -372,7 +372,7 @@ For EVERY non-passing test:
 **Step 4 — Rerun and verify**
 - Rerun the fixed test
 - Run any existing tests in the affected module to confirm no regressions
-- If the fix touches a contract or shared module, run the selection for the changed files per `_shared-test-selection.md` (`--files`); standalone, an escalated tier runs once at the end, never per fix
+- If the fix touches a contract or shared module, run the selection for the changed files per `_shared-test-selection.md` (`--files`); an escalated tier is reported and deferred, never run
 
 ### 4.4 Fix-Rerun Loop
 

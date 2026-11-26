@@ -36,7 +36,7 @@ out by the orchestrator, `_shared-project-profile.md`).
 | Shell, first | `<shell_prefix>` |
 | Each task | `<commands.test_task>`, all changed files in one call |
 | Each commit | `<tiers.per_commit gates>`, or nothing by hand when the pre-commit hook runs them |
-| Lane end, once | `node <WH>/scripts/workflow/run-tier.mjs lane_end --parallel --base <sha>`, then `<commands.test_lane_end>` |
+| Lane end, once | after your self-review's fixes: `node <WH>/scripts/workflow/run-tier.mjs lane_end --parallel --base <sha>`, then `<commands.test_lane_end>` |
 | Typecheck | `<commands.typecheck>` (incremental; `<commands.typecheck_clean>` only after a stale-build error) |
 | Heavy gate | through `slot.sh`, per `$WH/.claude/commands/_shared-test-selection.md`; a `self_locking` job as is |
 

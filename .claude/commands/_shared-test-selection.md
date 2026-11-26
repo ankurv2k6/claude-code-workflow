@@ -5,8 +5,9 @@ disable-model-invocation: true
 <!--
 Shared test-selection protocol. Referenced by implement-plan, implement-batch, verify-implementation,
 verify-ui and e2e-validate.
-Last audit: 2026-11-25 (v2: commands and tiers come from the project profile; one selector call per task,
-capped by tier. Lanes had run one test file per call, about 1,200 calls, and release checks at every stage)
+Last audit: 2026-11-26 (2.1: review beside the quick tier, then one wide run; one heavy job per machine; known
+reds subtracted; base never the default branch, no auto-escalation; the hotfix path. A 5-file hotfix had taken
+3 hours before a 2-minute deploy)
 -->
 
 # Test selection protocol
@@ -28,10 +29,10 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
 |---|---|---|
 | Each commit | `tiers.per_commit`, unless the project's pre-commit hook already runs them | the agent committing |
 | Each task | `commands.test_task` with every changed file in **one** call | the agent editing |
-| End of a lane or standalone module | `tiers.lane_end` once, then `commands.test_lane_end` once | the lane |
-| A verify sweep | its own fixes' delta; the callers' tests of any shared code it changed; the lane's `commands.test_lane_end` once | the verifier |
-| Merge into the integration branch | `tiers.merge` through `merge-lane.mjs`, skipped when the verifier ran it green on the lane head that merged | the orchestrator |
-| End of a cut | `tiers.cut_end` (invariant gates first), the combined final, its fixes merged, then `commands.test_full` once (never a tier gate) | the orchestrator |
+| End of a lane or standalone module | after the review's fixes: `tiers.lane_end` once, then `commands.test_lane_end` once | the lane |
+| A verify sweep | the quick tier beside its review; its fixes' delta and the callers' tests of shared code it changed; then the lane's `commands.test_lane_end` once, after the fixes | the verifier |
+| Merge into the integration branch | `tiers.merge` through `merge-lane.mjs`, skipped when the verifier ran it green on the lane head that merged; its tests are the delta, `tests.merge_delta`, never a broad selection | the orchestrator |
+| End of a cut, or a release candidate (a hotfix included) | `tiers.cut_end` (invariant gates first; not for a hotfix), the review or combined final, its fixes merged, then `commands.test_full` once (never a tier gate): one full run per release candidate | the orchestrator, or the session with the hotfix; `release.deploy` only the session the owner spoke to |
 | Routine re-merge between tracks | `tiers.merge` | the orchestrator |
 | Track-merge milestone (a finished cut into the mainline), or before a release | `tiers.track_merge` | the orchestrator |
 
@@ -45,11 +46,57 @@ name to its command. Fill placeholders (`{files}`, `{base}`, …) and prefix the
   absent: heavy gates run one at a time, by the orchestrator.
 - **Long commands write to `logs_dir`** (default `logs`: `<cmd> > <logs_dir>/<lane>-<what>.log 2>&1`), so
   the watchdog sees progress.
-- **Known reds.** A failure listed in the `known_reds` file is checked once at Phase 0 and never
-  re-diagnosed by a lane or verifier: report it by name. A suite in `invariant_suites` is never a known red;
-  its failure always blocks.
+- **One heavy job per machine.** With `tests.heavy_lock` set, a full run, a rehearsal, a sharded run or a
+  broad selection (above the quick tier, a merge tier with a heavy gate) runs inside it, outermost: `{cmd}` the
+  whole job, `{owner}` a label peers see; its slots stay inside. A release verification takes it once and runs
+  its pair (rehearsal and full run) side by side in that hold, which exports `tests.heavy_lock_token` so the
+  pair's own lock calls join it. Never two heavy jobs from two owners at once. **Before starting one, tell
+  peer sessions** (`SendMessage` to the agents you run, a Checkpoint-log line in the task list). No key: one
+  at a time, by hand, after telling peers.
+- **The base is the release or integration branch,** never the moving tip of the default branch (with no
+  release branch, the merge-base): `{base}` is the lane's base, or `docs.release_branch` for a hotfix. Always
+  pass it: a selector without one diffs against its own default (often `main`) and selects the whole drift.
+- **Never auto-escalate.** A selection runs at the tier its command caps. When the selector asks for more,
+  report "escalated to `<tier>`, deferred to the release candidate's full run" and run nothing broader, not a
+  related-tests run over the changed files either: on shared code it selects most of the tree.
+- **Known reds are subtracted.** Every run compares its reds with the `known_reds` file (checked once at
+  Phase 0): a listed red is reported by name as `known`, never re-diagnosed; only a red missing from it is
+  triaged. A listed file that now passes is reported for removal from the file. A suite in
+  `invariant_suites` is never a known red; its failure always blocks.
 - **Nothing broader in a lane:** no `commands.test_full` and no gate from `tiers.cut_end` or
   `tiers.track_merge`.
+
+## Review beside the tests, then one wide run
+
+A review reads the diff, not test results, so it never waits for them. At a task's end, a lane's end, a
+verify sweep and a hotfix:
+
+1. **Start the code review and the quick tier together** (`commands.test_task` on the changed files; v1:
+   `test-select --files`), once the edits are done.
+2. **Apply the review's findings;** re-run the quick tier on the files the fixes changed.
+3. **Then ONE wide run on the final code:** the lane-end selection, the merge tier or the release
+   candidate's full run. Never start a wide run before the review's fixes are in.
+4. **A file changed while a wide run is going** makes it stale: stop that run (by the PID you started),
+   finish the edits, then run it once.
+
+## Hotfix and release
+
+A hotfix branches off the release branch, merges there, deploys, then back-merges. One merge before the
+deploy, not two:
+
+1. **Start:** `release.hotfix_start` (`{hotfix}`). By hand: a worktree and branch `hotfix/<name>` off
+   `docs.release_branch`.
+2. **Fix, then review beside the quick tier** (above), base the release branch: the review is
+   `/verify-implementation` sweep 1 or a `code-reviewer` agent on the diff, plus the stub quick-check
+   (`/implement-plan` Step 4b) on the changed files. Apply the findings.
+3. **The release verification:** one heavy-lock hold, the rehearsal and `commands.test_full` side by side
+   in it, known reds subtracted; start `release.package` (`{bundle}`) beside it, not after it.
+4. **Green:** `release.hotfix_finish` merges into the release branch (`tests.merge_delta` at that merge;
+   the release branch moved since the start: package again from the merged head).
+5. **Deploy:** `release.deploy` (`{bundle}`, `{description}`) at the safe window, only with the owner's
+   approval of this deploy (`_shared-commit-protocol.md`), run by the session the owner spoke to, never by
+   an agent a command launched; then back-merge the release branch into the
+   integration branch, with `tests.merge_delta`.
 
 ## If MAPPED (no profile, v1): run the selector, not the suite
 
@@ -68,10 +115,9 @@ lists `--max-tier`, cap it: `quick` per task, `standard` at lane end.
 | After an edit | `test-select --files <changed>` | the agent editing |
 | A verify sweep | the selection for that sweep's own fixes, plus the callers of shared code it changed | the verifier |
 | End of a lane or module | `test-select --since <lane base>`, once | the lane |
-| The selector escalates **inside a lane or verifier** | do not run the escalated tier: run `vitest related` (or the runner's equivalent) on the changed files plus the suites for the touched code, and report "escalated to `<tier>`, deferred" | the lane or verifier |
+| The selector escalates | do not run the escalated tier, nor a related-tests run over the changed files: run the suites for the touched code and report "escalated to `<tier>`, deferred" to the release candidate's full run | the agent |
 | Merge into the integration branch | the suites in files that had conflicts, plus the test typecheck | the orchestrator |
 | Final gate of a batch | `--tier full`, once, on the final head | the orchestrator |
-| A standalone `/implement-plan` (no orchestrator) | an escalated tier runs once at module end, never per sweep | the agent |
 
 **Baseline plus delta.** Select `--since` the last green sha, not from scratch.
 
@@ -113,7 +159,7 @@ selector and map checker must do, and the traps they must handle) and a skeleton
 
 ```bash
 npm test 2>/dev/null || npx vitest run
-npx tsc --noEmit
+npx tsc --noEmit -p <pkg>   # or tsc --build for a solution-style tsconfig ("files": [] + references), where --noEmit checks nothing
 npm run lint 2>/dev/null || npx eslint .
 ```
 
